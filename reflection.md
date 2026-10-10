@@ -255,10 +255,11 @@ raises a clear `ValueError` instead of being silently accepted.
 the starting state before calling `mark_complete()`, because a test that only checks the
 end state would pass against a method that does nothing at all.
 
-One thing I want to be honest about: automated coverage of `pawpal_system.py` is 49%, and
-the `Scheduler` methods are not covered by assertions yet. I verified them by running the
-demo and reading the output, which caught real problems, but it is weaker evidence than a
-test suite and it is the first thing I would fix.
+One thing I was honest about while building: for a while automated coverage of
+`pawpal_system.py` sat at 49%, with the `Scheduler` methods verified only by running the
+demo and reading the output. That caught real problems, but it is weaker evidence than a
+test suite, so I went back and wrote assertions for every algorithmic method. Coverage is
+now 86%.
 
 ---
 
@@ -266,30 +267,49 @@ test suite and it is the first thing I would fix.
 
 **a. What you tested**
 
-Two automated tests, both passing:
+Twenty-two automated tests, all passing. I started with the two the project asked for and
+expanded the suite once the scheduler had real algorithms in it.
 
-`test_mark_complete_changes_status` checks that `Task.mark_complete()` sets `is_completed`
-to `True` and `mark_pending()` returns it to `False`. It asserts the starting value first,
-which matters more than it looks: without that assertion the test would still pass if
-`is_completed` defaulted to `True` and the method did nothing.
+The two foundational ones came first. `test_mark_complete_changes_status` checks that
+`Task.mark_complete()` sets `is_completed` to `True` and `mark_pending()` returns it to
+`False`, asserting the starting value first -- which matters more than it looks, because
+without that assertion the test would still pass if `is_completed` defaulted to `True` and
+the method did nothing. `test_add_task_increases_pet_task_count` checks that
+`Pet.add_task()` grows the list from 0 to 1 to 2 and stamps the task with the pet's `id`.
 
-`test_add_task_increases_pet_task_count` checks that `Pet.add_task()` grows the task list
-from 0 to 1 to 2, and that the task comes out stamped with the pet's `id`.
+Those two are the foundation everything else stands on. Completion status is what
+`filter_by_status()` reads, what `plan_day()` uses to decide what is still outstanding, and
+what recurrence gates on -- if that flag is wrong, three features are wrong and all of them
+fail quietly rather than loudly. The `pet_id` stamp is the relationship that lets a flat
+list of tasks still say which pet each one belongs to.
 
-These two are the foundation everything else stands on. Completion status is what
-`filter_by_status()` reads, what `plan_day()` uses to decide what is still outstanding,
-and what `handle_recurring()` gates on -- if that flag is wrong, three features are wrong
-and all of them fail quietly rather than loudly. The `pet_id` stamp is the relationship
-that lets a flat list of tasks still say which pet each one belongs to, so a broken stamp
-would make every cross-pet view wrong.
+The rest of the suite covers the algorithms, and I deliberately aimed at the cases where I
+thought I might be wrong rather than the cases I was confident about:
 
-Beyond the automated tests I verified the scheduler by running `main.py` and checking its
-output against what I expected: tasks from both pets merged into one chronological list, a
-cross-pet overlap reported, a completed daily task spawning tomorrow's occurrence with the
-right date, and a 30-minute budget dropping the low-priority task while keeping a shorter
-medium-priority one. I also checked the Streamlit UI end to end, confirming that adding a
-pet in the browser creates a real `Pet` object that survives a page re-run, and that a
-duplicate pet shows a readable error instead of a traceback.
+- **Sorting**: that `"9:00"` does not sort after `"17:30"`, which is exactly what plain
+  string comparison would do. Also that re-sorting an already-sorted list returns it
+  unchanged, so a plan is reproducible.
+- **Conflict detection**: an overlap across two different pets, two tasks at the identical
+  minute, and -- the one I most wanted proof of -- that back-to-back tasks at 08:00-08:30
+  and 08:30-09:00 are *not* reported. That is a strict-inequality detail I did not want to
+  be holding only in my head.
+- **Recurrence**: a daily task advancing exactly one day, a weekly one advancing seven, a
+  `once` task spawning nothing, and `handle_recurring()` returning the new task *without*
+  attaching it, so a caller looping over `pet.tasks` cannot mutate the list it is walking.
+- **Planning**: that a 30-minute budget drops the low-priority task and keeps the
+  medium-priority one even though the dropped task comes last in the day. Priority decides,
+  not clock position, and a test is the only way to keep that true.
+- **Validation**: that a priority of `"urgent"`, a duration of `0`, and times of `"25:00"`
+  or `"noon"` are all refused at construction rather than accepted and surfacing later as a
+  broken schedule.
+
+Line coverage of `pawpal_system.py` is 86%. What remains uncovered is mostly display
+formatting, which I verify by running `main.py` and reading the output.
+
+Beyond the automated tests I checked the Streamlit UI end to end, confirming that adding a
+pet in the browser creates a real `Pet` object that survives a page re-run, that completing
+a daily task there creates its follow-up by itself, and that a duplicate pet shows a
+readable error instead of a traceback.
 
 **b. Confidence**
 
@@ -325,8 +345,9 @@ With more time, the edge cases I would test next, roughly in order:
   `find_pet_by_id()` for the unambiguous case but the name lookup is still a trap.
 
 The honest summary: the paths I exercised work, and the paths I have not exercised are
-where I would expect to find problems. Raising automated coverage above 49% is the
-cheapest way to change that.
+where I would expect to find problems. Writing the test suite moved coverage from 49% to
+86% and turned most of "I watched it work" into "it is asserted", but the midnight case
+above is a real bug that no test currently catches.
 
 ---
 
@@ -350,10 +371,9 @@ of who owns the data.
 
 Three things, in the order I would do them.
 
-**Raise test coverage past 49%.** The scheduler's five algorithmic methods are currently
-verified by me reading demo output, which is how I found real problems but is not evidence
-that survives a change. Sorting, overlap detection, and the budget filter should each have
-assertions.
+**Fix the midnight boundary.** This is now the most concrete known bug: a 23:30 task
+lasting 45 minutes ends past minute 1440, and overlap comparison against an early-morning
+task silently fails. I would write the failing test first, then fix it.
 
 **Replace the `time_str` string with a real `datetime`.** I patched around the string by
 parsing it to minutes since midnight and validating it on construction, which fixed the

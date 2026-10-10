@@ -149,53 +149,72 @@ What each section shows:
 
 ```bash
 # Run the full test suite:
-pytest
+python -m pytest
 
 # Run with coverage of the logic layer:
-pytest --cov=pawpal_system --cov-report=term-missing
+python -m pytest --cov=pawpal_system --cov-report=term-missing
 ```
 
 Tests live in `tests/test_pawpal.py`. A `conftest.py` at the project root puts the
 project directory on `sys.path`, which is what lets the tests `import pawpal_system`.
 
-Sample test output:
+### What the tests cover
+
+22 tests, grouped by the behavior they pin down:
+
+| Group | Tests | What is verified |
+|-------|-------|------------------|
+| Task state | 4 | `mark_complete()` sets `is_completed` and `mark_pending()` clears it, asserting the starting value first so the test cannot pass against a method that does nothing. `add_task()` grows the list 0 to 1 to 2 and stamps the pet's `id`. `remove_task()` returns `False` for an absent id rather than raising. Invalid input -- priority `"urgent"`, duration `0`, time `"25:00"` or `"noon"` -- is refused at construction. |
+| Sorting correctness | 2 | Tasks come back in chronological order, including the case that `"9:00"` must not sort after `"17:30"` the way plain string comparison would. Ties at the same minute order the higher priority first, and re-sorting an already-sorted list returns it unchanged, so a plan is reproducible. |
+| Filtering | 2 | `filter_by_status()` returns exactly the done or outstanding set. `filter_by_pet()` resolves a pet name to its id, keeps only that pet's tasks out of the combined household list, and ignores case. |
+| Conflict detection | 4 | An 08:00 walk lasting 45 minutes is flagged against an 08:15 feeding for a different pet. Two tasks at the identical 17:30 are flagged. Back-to-back tasks (08:00-08:30 then 08:30-09:00) are *not* flagged. `conflict_warnings()` returns readable strings and raises nothing. |
+| Recurrence | 4 | Completing a `daily` task attaches an occurrence due one day later, not completed, with a new id, leaving exactly one pending task. A `weekly` task advances seven days. A `once` task is completed and spawns nothing. `handle_recurring()` returns the new task *without* attaching it, so a loop over `pet.tasks` is never mutated mid-iteration. |
+| Planning | 3 | A 30-minute budget keeps the high and medium tasks and drops the low-priority one, even though the dropped task is last in the day -- priority decides, not clock position. With no budget every pending task is returned in clock order, completed ones excluded. A scheduler with no owner raises a clear message. |
+
+### Sample test output
 
 ```
 ============================= test session starts ==============================
 platform darwin -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
 rootdir: /Users/sakxamshrestha/Desktop/ai110-module2show-pawpal-starter
 plugins: cov-7.1.0, anyio-4.15.1
-collected 2 items
+collected 22 items
 
-tests/test_pawpal.py ..                                                  [100%]
+tests/test_pawpal.py ......................                              [100%]
 
-============================== 2 passed in 0.01s ===============================
+============================== 22 passed in 0.04s ==============================
 ```
 
-### Test coverage
+### Coverage
 
-Both tests pass. They cover the two state changes the rest of the system depends on:
-
-| Test | Behavior verified |
-|------|-------------------|
-| `test_mark_complete_changes_status` | `Task.mark_complete()` sets `is_completed` to `True`, and `mark_pending()` returns it to `False`. The test asserts the starting state first, so it cannot pass against a method that does nothing. |
-| `test_add_task_increases_pet_task_count` | `Pet.add_task()` grows the pet's task list (0 → 1 → 2) and stamps the task with the pet's own `id`, which is the link the scheduler relies on to attribute a task to a pet. |
-
-Line coverage of `pawpal_system.py` is currently **44%** (209 statements, 117 uncovered):
+Line coverage of `pawpal_system.py` is **86%** (209 statements, 29 uncovered):
 
 ```
 Name               Stmts   Miss  Cover
 ------------------------------------------------
-pawpal_system.py     209    117    44%
-TOTAL                209    117    44%
+pawpal_system.py     209     29    86%
+TOTAL                209     29    86%
 ```
 
-Covered: `Task` construction and validation, `mark_complete`, `mark_pending`, and
-`Pet.add_task`. Not yet covered by automated tests: the `Scheduler` methods
-(`sort_by_time`, `filter_by_status`, `filter_by_pet`, `detect_conflicts`,
-`conflict_warnings`, `handle_recurring`, `plan_day`) and the automatic recurrence path
-(`Pet.complete_task`), which are currently verified by running `main.py` and reading its
-output rather than by assertions.
+The uncovered lines are mostly display helpers (`Task.describe()`, `Pet.label()`,
+`Scheduler.explain_plan()`), which are exercised by running `main.py` and reading its
+output, plus a few defensive branches such as `find_pet()` returning `None`.
+
+### Confidence level
+
+**4 out of 5 stars** -- four, deliberately, not five.
+
+What earns the four: every algorithmic feature has assertions behind it, including the
+awkward edges -- unpadded clock times, identical timestamps, back-to-back tasks that must
+*not* count as a clash, and a `once` task that must spawn nothing. The suite pins down
+behavior I would otherwise only have eyeballed in demo output.
+
+What holds back the fifth star: a task crossing midnight is still wrong. A 23:30 task
+lasting 45 minutes ends at minute 1455, and comparing that against an early-morning task
+fails because minutes-since-midnight has no concept of a day boundary. I know about it,
+there is no test for it yet, and fixing it properly means moving from `"HH:MM"` strings to
+real `datetime` values. The Streamlit layer also has no tests in this suite; it was
+verified manually through Streamlit's `AppTest` harness during development.
 
 ## 📐 Smarter Scheduling
 

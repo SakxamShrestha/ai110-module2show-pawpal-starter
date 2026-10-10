@@ -78,10 +78,12 @@ composed the primitives into a day plan.
   20-minute task dropped while a medium-priority 15-minute one survived. I also checked
   that invalid input (priority "urgent", duration 0, time "25:00" or "noon") raises a clear
   error.
-- **Coverage is weaker than it looks.** Two tests pass but line coverage of
-  `pawpal_system.py` is 49%, and the scheduler methods are verified by reading demo output
-  rather than by assertions. I would rather state that than imply the suite proves more
-  than it does.
+- **Coverage was weaker than it looked.** The first suite was two passing tests and 49%
+  line coverage, with every scheduler method verified only by reading demo output. I had
+  the suite expanded to 22 tests covering sorting, both filters, all three conflict cases,
+  recurrence for daily, weekly and one-off tasks, and the budget plan, which took coverage
+  to 86%. The remaining gap is display formatting and one known bug (a task crossing
+  midnight) that I chose to document rather than hide.
 
 ---
 
