@@ -109,13 +109,56 @@ hold one name is more structure than the problem justifies right now.
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+My scheduler works with four constraints.
+
+**Clock time** is the backbone. Every task carries a start time and a duration, so the
+scheduler knows not just when something begins but when it ends. This is what makes
+`detect_conflicts()` useful: an 08:00 walk lasting 45 minutes genuinely collides with an
+08:15 feeding, and comparing start times alone would have missed it.
+
+**Priority** decides what survives when there is not enough time. Tasks are `low`,
+`medium`, or `high`, and `plan_day()` spends the available minutes on the most important
+work first.
+
+**Available time** is the constraint that forces real decisions. `plan_day()` takes a
+number of minutes and drops whatever no longer fits, which is the only place the system
+genuinely says no to something.
+
+**Caretaker assignment** is tracked on `assigned_to`, but the scheduler does not reason
+about it yet. It is recorded and displayed, not enforced.
+
+I decided time mattered most because it is the constraint the owner cannot negotiate with:
+a day has a fixed number of minutes, and two tasks at once is physically impossible no
+matter how the owner feels about either one. Priority came second because it is what you
+need the moment time runs short -- without it the system would have to drop tasks
+arbitrarily. Preferences like which caretaker does what came last because getting them
+wrong is an inconvenience, while getting the time wrong means a pet does not get fed.
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The clearest tradeoff is in `plan_day()`: it fills the time budget greedily by priority,
+and it does not try to find the combination of tasks that uses the budget most fully.
+
+A concrete case from my own demo output. With 30 minutes available and these outstanding
+tasks -- Evening Kibble (high, 10 min), Ear Drops (medium, 5 min), Wand Play (medium, 15
+min), Brush Coat (low, 20 min) -- my scheduler keeps the first three, using exactly 30 of
+30 minutes. But the ordering is what matters: it took Wand Play because it is medium
+priority, and refused Brush Coat because it is low. If Wand Play had been 25 minutes
+instead of 15, the plan would have kept Evening Kibble and Ear Drops for 15 minutes total
+and left 15 minutes unused, even though Brush Coat would have fit in that gap. A smarter
+algorithm would have packed the day more tightly.
+
+I think that is the right tradeoff here. The alternative is a knapsack-style search that
+maximizes minutes used, and "minutes used" is the wrong thing to maximize for pet care --
+it would happily fill the day with grooming while skipping medication, because a bigger
+number is not a better day for the animal. Greedy-by-priority produces a plan the owner
+can predict and trust: the thing that got dropped is always the least important thing, and
+the owner can see exactly why. Predictability is worth more than efficiency when the
+consequence of a bad answer is a pet missing a dose.
+
+It also means the result is reproducible. Sorting breaks ties on priority and then title,
+so the same input always produces the same plan, which made the behavior straightforward
+to verify by running the demo.
 
 ---
 
@@ -123,13 +166,72 @@ hold one name is more structure than the problem justifies right now.
 
 **a. How you used AI**
 
-- How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
-- What kinds of prompts or questions were most helpful?
+I used Claude Code in the terminal for most of the build, in roughly four modes.
+
+**Design review.** After writing my class skeletons I asked it to look for missing
+relationships and logic bottlenecks rather than asking it to write code. That single
+question produced the most valuable output of the project: it found that my
+`Owner.get_all_tasks()` returned `list[tuple[Pet, Task]]` while every `Scheduler` method
+took `list[Task]`, so the two halves of my design could not actually be connected. I would
+have hit that as a confusing bug an hour into implementation.
+
+**Implementation.** I had it write the method bodies from my skeletons, then checked the
+behavior myself by running the demo script and reading the output.
+
+**Investigation.** I asked how `st.session_state` works and how a `Scheduler` should pull
+tasks from an `Owner`. These were the questions where I wanted to understand a mechanism,
+not receive code.
+
+**Documentation.** I had it draft README sections and reflection prose from work that
+already existed, then edited for voice.
+
+The most useful prompts were the ones that asked for a critique of something I had already
+written, not the ones that asked for new code. "Review this for missing relationships and
+bottlenecks" produced six concrete, checkable problems. "Write me a scheduler" would have
+produced something I did not understand well enough to defend. The second most useful
+pattern was asking *how* something works -- "how should the Scheduler retrieve tasks from
+the Owner" -- because the answer taught me a principle I then applied myself, rather than
+handing me a line to paste.
+
+What did not work as well was accepting long code generations without running them. Every
+time I ran the code and read the actual output, I found something worth changing.
 
 **b. Judgment and verification**
 
-- Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+The suggestion I turned down was introducing a `Caretaker` class to replace my
+`assigned_to` string field. The reasoning offered was sound in the abstract -- a free
+string means "Alex", "alex", and "Alex " become three different people, and you cannot
+reliably ask "what is Alex responsible for". But nothing in this project needs to query a
+caretaker's workload, and adding a whole class to hold one name is more structure than my
+problem has. I kept the string and wrote down why, so the decision is visible rather than
+accidental.
+
+I also pushed back on a smaller one: the AI's first time-budget demo used 60 minutes, and
+every outstanding task happened to fit, so the output showed nothing being dropped. The
+code was correct but the demo proved nothing. I had it lowered to 30 minutes so the
+filtering behavior actually appears in the output a grader reads.
+
+For verification I did not rely on the code looking plausible. Three things:
+
+**I ran it and read the output.** The demo script prints a start-and-end window for every
+task, which is what let me confirm by eye that the 08:00-08:45 walk and the 08:15 feeding
+are flagged as a conflict, and that Brush Coat is the task dropped from a 30-minute budget
+while the shorter medium-priority task survives.
+
+**I checked the boundaries deliberately.** I verified that a task set to `once` returns
+`None` from `handle_recurring()`, that a task not yet complete also returns `None`, that
+`remove_task()` on an id that does not exist returns `False` rather than raising, and that
+invalid input -- a priority of "urgent", a duration of 0, a time of "25:00" or "noon" --
+raises a clear `ValueError` instead of being silently accepted.
+
+**I wrote tests for the things everything else depends on.** The completion test asserts
+the starting state before calling `mark_complete()`, because a test that only checks the
+end state would pass against a method that does nothing at all.
+
+One thing I want to be honest about: automated coverage of `pawpal_system.py` is 49%, and
+the `Scheduler` methods are not covered by assertions yet. I verified them by running the
+demo and reading the output, which caught real problems, but it is weaker evidence than a
+test suite and it is the first thing I would fix.
 
 ---
 
@@ -137,13 +239,67 @@ hold one name is more structure than the problem justifies right now.
 
 **a. What you tested**
 
-- What behaviors did you test?
-- Why were these tests important?
+Two automated tests, both passing:
+
+`test_mark_complete_changes_status` checks that `Task.mark_complete()` sets `is_completed`
+to `True` and `mark_pending()` returns it to `False`. It asserts the starting value first,
+which matters more than it looks: without that assertion the test would still pass if
+`is_completed` defaulted to `True` and the method did nothing.
+
+`test_add_task_increases_pet_task_count` checks that `Pet.add_task()` grows the task list
+from 0 to 1 to 2, and that the task comes out stamped with the pet's `id`.
+
+These two are the foundation everything else stands on. Completion status is what
+`filter_by_status()` reads, what `plan_day()` uses to decide what is still outstanding,
+and what `handle_recurring()` gates on -- if that flag is wrong, three features are wrong
+and all of them fail quietly rather than loudly. The `pet_id` stamp is the relationship
+that lets a flat list of tasks still say which pet each one belongs to, so a broken stamp
+would make every cross-pet view wrong.
+
+Beyond the automated tests I verified the scheduler by running `main.py` and checking its
+output against what I expected: tasks from both pets merged into one chronological list, a
+cross-pet overlap reported, a completed daily task spawning tomorrow's occurrence with the
+right date, and a 30-minute budget dropping the low-priority task while keeping a shorter
+medium-priority one. I also checked the Streamlit UI end to end, confirming that adding a
+pet in the browser creates a real `Pet` object that survives a page re-run, and that a
+duplicate pet shows a readable error instead of a traceback.
 
 **b. Confidence**
 
-- How confident are you that your scheduler works correctly?
-- What edge cases would you test next if you had more time?
+Moderately confident, and more confident about some parts than others.
+
+I am confident about sorting, conflict detection, and the time-budget plan, because I have
+watched them produce correct output on data I built specifically to stress them -- an
+overlapping morning, a mix of priorities, and a budget tight enough to force a drop. I am
+confident about input validation because I deliberately fed it bad values and watched each
+one raise.
+
+I am less confident about recurrence. I have verified one daily task rolling over by one
+day, and that is a single case of several that exist.
+
+With more time, the edge cases I would test next, roughly in order:
+
+- **Recurrence across a month or year boundary.** A weekly task completed on 29 December
+  should land in January. `timedelta` should handle it, but I have not proved it.
+- **A task with no `due_date` at all.** `handle_recurring()` falls back to `date.today()`,
+  which means the spawned date depends on when the code runs -- that deserves a test
+  pinning the behavior down.
+- **Tasks that touch end-to-start.** An 08:00-08:30 task and an 08:30-09:00 task should
+  *not* be a conflict. I believe my comparison is correct because it uses strict
+  inequalities, but that is exactly the kind of off-by-one that belongs in a test rather
+  than in my head.
+- **A task crossing midnight.** A 23:30 task lasting 45 minutes ends at 00:15 the next
+  day. My `end_minutes()` returns a value past 1440 and `format_minutes()` wraps it, so
+  the display is right but overlap logic against an early-morning task would be wrong. I
+  think this is a genuine bug I have not fixed.
+- **An exactly-full time budget**, and a budget of zero, to confirm nothing is kept by
+  accident.
+- **Two pets with the same name**, since `find_pet()` returns the first match. I added
+  `find_pet_by_id()` for the unambiguous case but the name lookup is still a trap.
+
+The honest summary: the paths I exercised work, and the paths I have not exercised are
+where I would expect to find problems. Raising automated coverage above 49% is the
+cheapest way to change that.
 
 ---
 
@@ -151,12 +307,63 @@ hold one name is more structure than the problem justifies right now.
 
 **a. What went well**
 
-- What part of this project are you most satisfied with?
+The decision to make `Task` a single generalized class instead of putting
+`assign_walker()` and `assign_food()` methods on `Pet`. A walk, a feeding, a dose of
+medication, and a vet visit are the same shape -- something that happens at a time, takes a
+while, matters a certain amount, and is either done or not. Treating them as one type with
+different field values means adding a new kind of care costs nothing: the Streamlit
+category dropdown has seven options and not one of them required a code change.
+
+I am also satisfied that the scheduler holds no task data. Keeping it a service over a list
+of tasks rather than a store of them meant I could verify its behavior against hand-built
+lists without constructing a whole household, and it kept one clear answer to the question
+of who owns the data.
 
 **b. What you would improve**
 
-- If you had another iteration, what would you improve or redesign?
+Three things, in the order I would do them.
+
+**Raise test coverage past 49%.** The scheduler's five algorithmic methods are currently
+verified by me reading demo output, which is how I found real problems but is not evidence
+that survives a change. Sorting, overlap detection, and the budget filter should each have
+assertions.
+
+**Replace the `time_str` string with a real `datetime`.** I patched around the string by
+parsing it to minutes since midnight and validating it on construction, which fixed the
+sorting trap. But the midnight-crossing bug I described above exists because minutes since
+midnight has no concept of a day boundary. A `datetime` would remove that whole class of
+problem instead of guarding one symptom.
+
+**Make conflict handling do something.** `detect_conflicts()` reports overlaps and stops
+there. Since it returns the task pairs rather than text, the next step is a method that
+proposes a new time for the lower-priority task in each pair, which is the feature an owner
+would actually want.
+
+If there were a fourth, I would add JSON persistence. Everything currently lives in
+`st.session_state` and disappears when the browser session ends, which is fine for a demo
+and useless for real use.
 
 **c. Key takeaway**
 
-- What is one important thing you learned about designing systems or working with AI on this project?
+Designing the data first, and only then the behavior, decided how the whole project went
+-- and the most valuable thing AI did was catch a flaw in that data design before I built
+anything on top of it.
+
+The specific moment: my skeleton had `Owner.get_all_tasks()` returning `list[tuple[Pet,
+Task]]` while every `Scheduler` method accepted `list[Task]`. Both looked reasonable in
+isolation, and the mismatch only existed in the gap between them. I would not have seen it
+by rereading either class, because neither class was wrong. I found it by asking for a
+review of the relationships rather than of the code.
+
+The broader lesson about working with AI is that it was most useful as a critic of work I
+had already done, and least useful when I let it generate something I had not thought
+about myself. The design review found six real problems. The generated code was good but
+needed running before I trusted it -- and when I ran it I found that the demo's 60-minute
+budget hid the very behavior it was supposed to demonstrate. Code that looks right and code
+that is right are different things, and the only way I closed that gap was executing it and
+reading the output.
+
+The other half of that lesson is that I had to stay the one making decisions. I turned down
+the `Caretaker` class because the structure was not worth the problem it solved, not
+because the suggestion was wrong. Being able to say why I rejected something was what made
+the design mine.

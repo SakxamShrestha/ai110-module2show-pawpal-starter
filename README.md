@@ -116,26 +116,75 @@ What each section shows:
 # Run the full test suite:
 pytest
 
-# Run with coverage:
-pytest --cov
+# Run with coverage of the logic layer:
+pytest --cov=pawpal_system --cov-report=term-missing
 ```
+
+Tests live in `tests/test_pawpal.py`. A `conftest.py` at the project root puts the
+project directory on `sys.path`, which is what lets the tests `import pawpal_system`.
 
 Sample test output:
 
 ```
-# Paste your pytest output here
+============================= test session starts ==============================
+platform darwin -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/sakxamshrestha/Desktop/ai110-module2show-pawpal-starter
+plugins: cov-7.1.0, anyio-4.15.1
+collected 2 items
+
+tests/test_pawpal.py ..                                                  [100%]
+
+============================== 2 passed in 0.01s ===============================
 ```
+
+### Test coverage
+
+Both tests pass. They cover the two state changes the rest of the system depends on:
+
+| Test | Behavior verified |
+|------|-------------------|
+| `test_mark_complete_changes_status` | `Task.mark_complete()` sets `is_completed` to `True`, and `mark_pending()` returns it to `False`. The test asserts the starting state first, so it cannot pass against a method that does nothing. |
+| `test_add_task_increases_pet_task_count` | `Pet.add_task()` grows the pet's task list (0 → 1 → 2) and stamps the task with the pet's own `id`, which is the link the scheduler relies on to attribute a task to a pet. |
+
+Line coverage of `pawpal_system.py` is currently **49%** (176 statements, 90 uncovered):
+
+```
+Name               Stmts   Miss  Cover
+------------------------------------------------
+pawpal_system.py     176     90    49%
+TOTAL                176     90    49%
+```
+
+Covered: `Task` construction and validation, `mark_complete`, `mark_pending`, and
+`Pet.add_task`. Not yet covered by automated tests: the `Scheduler` methods
+(`sort_by_time`, `filter_by_status`, `detect_conflicts`, `handle_recurring`,
+`plan_day`), which are currently verified by running `main.py` and reading its output
+rather than by assertions.
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
+All scheduling logic lives on `Scheduler` in `pawpal_system.py`. It stores no task data
+of its own: it receives tasks, usually via `Owner.get_all_tasks()`, and returns a result.
+Because the owner flattens tasks from every pet into one list, each feature below operates
+across the whole household rather than one pet at a time.
 
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `Scheduler.sort_by_time()`, `Task.start_minutes()` | Chronological. Times are converted to minutes since midnight rather than compared as text, so `"9:00"` cannot sort after `"17:30"`. Ties break on priority then title, so repeat runs give identical output. |
+| Filtering | `Scheduler.filter_by_status()`, `Pet.get_pending_tasks()`, `Owner.get_all_pending_tasks()` | Splits done from outstanding. `plan_day()` builds on this to drop work that does not fit the time available. |
+| Conflict handling | `Scheduler.detect_conflicts()`, `Task.overlaps()` | Compares time *ranges*, not start times: an 08:00 walk lasting 45 minutes collides with an 08:15 feeding. Returns the task pairs so a caller can act on them. Tasks that merely touch end-to-start do not count as conflicts. |
+| Recurring tasks | `Scheduler.handle_recurring()`, `Task.repeats()`, `Task.new_id()` | `daily` advances one day, `weekly` seven, `once` never repeats. Only fires on a completed task. Returns the new occurrence instead of appending it, so a list being iterated is never mutated mid-loop. |
+| Time-budgeted planning | `Scheduler.plan_day()`, `dropped_from_plan()` | Spends a fixed number of available minutes on the most important outstanding tasks first, then returns the kept set in clock order. What gets dropped is decided by priority, not by position in the day. |
+| Plan explanation | `Scheduler.explain_plan()`, `Task.describe()` | One line per task giving its time window, pet, duration, priority, and why it was scheduled, plus a note when it overlaps another task. |
+
+### Classes
+
+| Class | Responsibility |
+|-------|----------------|
+| `Task` | One unit of care -- a walk, feeding, medication, vet visit, or grooming -- held as field values rather than as separate subclasses. Owns its own completion status and validates its priority, duration, and clock time on construction. |
+| `Pet` | The animal receiving care. Holds identifying details and dietary notes, plus the collection of tasks assigned to it. |
+| `Owner` | The household. Holds contact details and the list of pets, and flattens every pet's tasks into one list for the scheduler. |
+| `Scheduler` | The algorithmic engine. Holds a reference to the owner but no task data, so the same methods can be tested against a hand-built list of tasks. |
 
 ## 📸 Demo Walkthrough
 
