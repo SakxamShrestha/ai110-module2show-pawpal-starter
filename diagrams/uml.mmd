@@ -1,4 +1,6 @@
 classDiagram
+    %% Superseded by uml_final.mmd, which is the authoritative final diagram.
+    %% Kept because earlier phases referenced this filename.
     %% PawPal+ class design -- matches pawpal_system.py
     %% Owner holds Pets, Pet holds Tasks, Scheduler is a stateless service over Tasks.
 
@@ -74,4 +76,4 @@ classDiagram
     Task ..> Pet : pet_id refers to
     Scheduler --> Owner : plans for
     Scheduler ..> Task : organizes
-    note for Scheduler "handle_recurring() and Pet.complete_task()\nboth call the module function next_occurrence()" 
+    note for Scheduler "handle_recurring() and Pet.complete_task() both call the module function next_occurrence()"

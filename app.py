@@ -30,6 +30,24 @@ def slugify(text: str) -> str:
     return "-".join(text.lower().split())
 
 
+def task_rows(scheduler: Scheduler, tasks: list) -> list:
+    """Turn tasks into table rows: one dict per task, in clock order."""
+    return [
+        {
+            "Time": f"{task.time_str}-{format_minutes(task.end_minutes())}",
+            "Pet": scheduler.pet_name_for(task),
+            "Task": task.title,
+            "Category": task.category,
+            "Minutes": task.duration_minutes,
+            "Priority": task.priority,
+            "Repeats": task.frequency,
+            "With": task.assigned_to or "--",
+            "Status": "done" if task.is_completed else "todo",
+        }
+        for task in scheduler.sort_by_time(tasks)
+    ]
+
+
 def get_owner() -> Owner:
     """Return the Owner held in session state, creating it on first run.
 
@@ -188,36 +206,52 @@ if not all_tasks:
     st.info("No tasks yet. Add one above.")
     st.stop()
 
-for task in scheduler.sort_by_time(all_tasks):
-    window = f"{task.time_str}-{format_minutes(task.end_minutes())}"
-    done_col, text_col, remove_col = st.columns([1, 8, 1])
+pending_count = len(owner.get_all_pending_tasks())
+done_count = len(all_tasks) - pending_count
+summary = st.columns(3)
+summary[0].metric("Tasks today", len(all_tasks))
+summary[1].metric("Outstanding", pending_count)
+summary[2].metric("Done", done_count)
 
-    is_done = done_col.checkbox(
-        "done", value=task.is_completed, key=f"done-{task.id}", label_visibility="hidden"
-    )
-    if is_done != task.is_completed:
-        if is_done:
-            # Owner.complete_task marks it done and, for a daily or weekly
-            # task, attaches the next occurrence by itself.
-            follow_up = owner.complete_task(task.id)
-            if follow_up is not None:
-                st.toast(f"Next {follow_up.title} scheduled for {follow_up.due_date}.")
-        else:
-            task.mark_pending()
-        st.rerun()
+# Ordering here is Scheduler.sort_by_time(), not insertion order.
+st.table(task_rows(scheduler, all_tasks))
 
-    label = (
-        f"`{window}` **{task.title}** -- {scheduler.pet_name_for(task)} -- "
-        f"{task.duration_minutes} min, {task.priority} priority, {task.frequency}"
-    )
-    if task.assigned_to:
-        label += f" -- {task.assigned_to}"
-    text_col.markdown(f"~~{label}~~" if task.is_completed else label)
+if done_count == len(all_tasks):
+    st.success("Everything on today's list is done.")
 
-    if remove_col.button("✕", key=f"remove-{task.id}", help="Remove this task"):
-        pet = owner.find_pet_by_id(task.pet_id)
-        if pet is not None and pet.remove_task(task.id):
+with st.expander("Mark done or remove a task"):
+    for task in scheduler.sort_by_time(all_tasks):
+        done_col, text_col, remove_col = st.columns([1, 8, 1])
+
+        is_done = done_col.checkbox(
+            "done",
+            value=task.is_completed,
+            key=f"done-{task.id}",
+            label_visibility="hidden",
+        )
+        if is_done != task.is_completed:
+            if is_done:
+                # Owner.complete_task marks it done and, for a daily or weekly
+                # task, attaches the next occurrence by itself.
+                follow_up = owner.complete_task(task.id)
+                if follow_up is not None:
+                    st.toast(
+                        f"Next {follow_up.title} scheduled for {follow_up.due_date}."
+                    )
+            else:
+                task.mark_pending()
             st.rerun()
+
+        label = (
+            f"`{task.time_str}` **{task.title}** -- {scheduler.pet_name_for(task)}, "
+            f"{task.duration_minutes} min, {task.priority} priority"
+        )
+        text_col.markdown(f"~~{label}~~" if task.is_completed else label)
+
+        if remove_col.button("✕", key=f"remove-{task.id}", help="Remove this task"):
+            pet = owner.find_pet_by_id(task.pet_id)
+            if pet is not None and pet.remove_task(task.id):
+                st.rerun()
 
 # --------------------------------------------------------------------------
 # One pet at a time
@@ -226,19 +260,39 @@ with st.expander("Filter by pet"):
     chosen = st.selectbox(
         "Show tasks for", [pet.name for pet in owner.pets], key="filter-pet"
     )
-    mine = scheduler.sort_by_time(scheduler.filter_by_pet(all_tasks, chosen))
+    mine = scheduler.filter_by_pet(all_tasks, chosen)
     st.caption(f"{len(mine)} tasks for {chosen}")
-    for task in mine:
-        st.markdown(f"- `{task.time_str}` {task.title} ({task.category})")
+    if mine:
+        st.table(task_rows(scheduler, mine))
+    else:
+        st.info(f"{chosen} has nothing scheduled.")
 
 # --------------------------------------------------------------------------
 # Conflicts
 # --------------------------------------------------------------------------
-warnings = scheduler.conflict_warnings(all_tasks)
-if warnings:
+conflicts = scheduler.detect_conflicts(all_tasks)
+if conflicts:
     st.subheader("Scheduling conflicts")
-    for warning in warnings:
-        st.warning(warning.removeprefix("WARNING: "))
+    st.caption(
+        f"{len(conflicts)} clash(es). Nothing is blocked -- these are warnings for you "
+        "to resolve."
+    )
+    for first, second in conflicts:
+        # The less important task is the one worth moving, so say which it is
+        # rather than leaving the owner to work it out.
+        movable = second if second.priority_rank() <= first.priority_rank() else first
+        keeper = first if movable is second else second
+        st.warning(
+            f"**{first.time_str} {first.title}** "
+            f"({scheduler.pet_name_for(first)}) runs to "
+            f"{format_minutes(first.end_minutes())}, but "
+            f"**{second.time_str} {second.title}** "
+            f"({scheduler.pet_name_for(second)}) starts then.\n\n"
+            f"Suggestion: move *{movable.title}* ({movable.priority} priority) and keep "
+            f"*{keeper.title}* ({keeper.priority} priority) where it is."
+        )
+else:
+    st.success("No scheduling conflicts today.")
 
 # --------------------------------------------------------------------------
 # Plan the day against a time budget
@@ -252,15 +306,21 @@ if st.button("Generate plan", type="primary"):
         st.info("Nothing outstanding fits that budget.")
     else:
         used = sum(task.duration_minutes for task in plan)
-        st.success(f"{len(plan)} tasks, using {used} of {budget} minutes.")
+        st.success(
+            f"{len(plan)} tasks fit, using {used} of {budget} minutes "
+            f"({budget - used} spare)."
+        )
+        st.table(task_rows(scheduler, plan))
+        st.markdown("**Why these tasks**")
         for line in scheduler.explain_plan(plan):
             st.markdown(f"- {line}")
 
     dropped = scheduler.dropped_from_plan(plan)
     if dropped:
-        st.caption("Did not fit, lowest priority first:")
-        for task in dropped:
-            st.markdown(
-                f"- {task.title} for {scheduler.pet_name_for(task)} "
-                f"({task.duration_minutes} min, {task.priority} priority)"
+        st.warning(
+            "Dropped because the time ran out, least important first: "
+            + ", ".join(
+                f"{task.title} ({task.duration_minutes} min, {task.priority})"
+                for task in sorted(dropped, key=lambda t: t.priority_rank())
             )
+        )

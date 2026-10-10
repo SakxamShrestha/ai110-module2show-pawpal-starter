@@ -1,26 +1,62 @@
-# PawPal+ (Module 2 Project)
+# PawPal+ 🐾
 
-You are building **PawPal+**, a Streamlit app that helps a pet owner plan care tasks for their pet.
+A pet care planning assistant. PawPal+ keeps track of every care task across a household of
+pets -- walks, feedings, medication, grooming, enrichment, vet visits -- orders them into a
+single day, warns when two of them collide, and decides what to drop when there is not
+enough time for everything.
 
-## Scenario
+Built as a Python logic layer with a Streamlit interface on top. The scheduling logic has
+no dependency on the UI and can be driven entirely from the command line.
 
-A busy pet owner needs help staying consistent with pet care. They want an assistant that can:
+## Features
 
-- Track pet care tasks (walks, feeding, meds, enrichment, grooming, etc.)
-- Consider constraints (time available, priority, owner preferences)
-- Produce a daily plan and explain why it chose that plan
+**Scheduling**
 
-Your job is to design the system first (UML), then implement the logic in Python, then connect it to the Streamlit UI.
+- **Chronological ordering** across every pet at once, not one pet at a time. Clock times
+  are converted to minutes since midnight rather than compared as text, so `"9:00"` cannot
+  sort after `"17:30"`.
+- **Conflict warnings** based on overlapping time *ranges*, not just identical start times:
+  an 08:00 walk lasting 45 minutes is flagged against an 08:15 feeding. Reported as
+  warnings, never as errors, with a suggestion of which task to move.
+- **Time-budgeted day plans.** Give the scheduler the minutes you actually have and it
+  keeps the most important outstanding work, dropping the least important. What gets cut is
+  decided by priority, not by position in the day.
+- **Plan explanations**: one line per scheduled task saying why it is there, plus a note
+  when it overlaps something else.
+- **Automatic recurrence.** Completing a `daily` or `weekly` task creates its next
+  occurrence by itself, with the due date advanced by `timedelta`.
+- **Filtering** by completion status or by pet name.
 
-## What you will build
+**Data handling**
 
-Your final app should:
+- **One generalized `Task` type.** A walk, a dose of medication, and a feeding differ by
+  field values, not by class, so adding a new kind of care needs no new code.
+- **Validation at construction.** An impossible priority, a zero duration, or a time like
+  `"25:00"` is refused immediately rather than corrupting a schedule later.
+- **Readable errors in the UI.** Duplicate pets and invalid task data surface as messages,
+  not tracebacks.
 
-- Let a user enter basic owner + pet info
-- Let a user add/edit tasks (duration + priority at minimum)
-- Generate a daily schedule/plan based on constraints and priorities
-- Display the plan clearly (and ideally explain the reasoning)
-- Include tests for the most important scheduling behaviors
+## Architecture
+
+| File | Role |
+|------|------|
+| `pawpal_system.py` | All four classes and every algorithm. No UI imports. |
+| `main.py` | CLI demo: builds a household and exercises each feature. |
+| `app.py` | Streamlit UI. Calls class methods only; holds no scheduling logic. |
+| `tests/test_pawpal.py` | 22 pytest cases over the logic layer. |
+| `diagrams/uml_final.mmd` | Mermaid class diagram of the final design. |
+
+| Class | Responsibility |
+|-------|----------------|
+| `Task` | One unit of care. Owns its completion status and validates its own fields. |
+| `Pet` | The animal receiving care, and the collection of tasks assigned to it. |
+| `Owner` | The household. Flattens every pet's tasks into one list for the scheduler. |
+| `Scheduler` | The algorithms. Holds a reference to the owner but stores no task data. |
+
+The data nests from the outside in (`Owner` → `Pet` → `Task`) while `Scheduler` sits beside
+it as a service. `Task` stores a `pet_id` rather than a `Pet` reference, which is what lets
+`Owner.get_all_tasks()` hand the scheduler one flat list that the UI can still resolve back
+to a pet name for display. Full diagram: [`diagrams/uml_final.mmd`](diagrams/uml_final.mmd).
 
 ## Getting started
 
@@ -32,15 +68,23 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Suggested workflow
+### Run the CLI demo
 
-1. Read the scenario carefully and identify requirements and edge cases.
-2. Draft a UML diagram (classes, attributes, methods, relationships).
-3. Convert UML into Python class stubs (no logic yet).
-4. Implement scheduling logic in small increments.
-5. Add tests to verify key behaviors.
-6. Connect your logic to the Streamlit UI in `app.py`.
-7. Refine UML so it matches what you actually built.
+```bash
+python main.py
+```
+
+### Run the Streamlit app
+
+```bash
+streamlit run app.py
+```
+
+### Run the tests
+
+```bash
+python -m pytest
+```
 
 ## 🖥️ Sample Output
 
@@ -244,12 +288,133 @@ across the whole household rather than one pet at a time.
 
 ## 📸 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+### What the interface offers
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+Launch with `streamlit run app.py`.
 
-**Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
+- **Sidebar -- owner profile.** Name, email, and phone, plus a running count of pets and
+  tasks. A *Load sample household* button fills the app with two pets and seven tasks so
+  the scheduling features can be seen immediately, and *Clear everything* empties it again.
+- **Pets.** A form taking name, species, breed, age, and dietary notes. Each registered pet
+  is listed with its task count and how many are still outstanding.
+- **Add a task.** Pick the pet, then set a title, category, start time, duration, priority,
+  frequency, and who is responsible.
+- **Today's Schedule.** Three counters (tasks today, outstanding, done) above a table of
+  every task in clock order. A collapsible panel underneath holds a checkbox to complete
+  each task and a ✕ to remove it.
+- **Filter by pet.** A dropdown narrowing the table to one pet.
+- **Scheduling conflicts.** Yellow warnings naming both clashing tasks and suggesting which
+  one to move. A green confirmation appears when there are none.
+- **Build a plan.** A slider for the minutes available and a button that produces the plan
+  as a table, the reasoning line by line, and a warning listing anything that had to be
+  dropped.
+
+### An example workflow
+
+1. Open the app and enter your name in the sidebar.
+2. Add a pet: `Milo`, dog, Beagle, age 4, "grain-free kibble only". Add a second: `Luna`,
+   cat, Tabby, age 2, "allergic to chicken".
+3. Add a task for Milo: *Park Walk*, category `walk`, 08:00, 45 minutes, high priority,
+   daily, assigned to Jordan.
+4. Add a task for Luna: *Morning Kibble*, category `feeding`, 08:15, 10 minutes, high
+   priority, daily.
+5. Look at **Today's Schedule**. Both pets' tasks appear in one table, ordered by time --
+   even though they were entered pet by pet.
+6. A **conflict warning** appears straight away: Milo's walk runs to 08:45 but Luna's
+   feeding starts at 08:15, and the owner cannot do both. The warning names the task to
+   move.
+7. Add a few more tasks across the day, then set the **slider** to 30 minutes and press
+   *Generate plan*. The scheduler keeps the most important outstanding tasks that fit and
+   warns about what it dropped.
+8. Tick the checkbox beside *Park Walk*. Because it is a daily task, a toast confirms that
+   tomorrow's occurrence has been created, and the task count rises by one.
+9. Use **Filter by pet** to check one animal's day on its own.
+
+### Scheduler behavior this demonstrates
+
+| Behavior | Where you see it |
+|----------|------------------|
+| Sorting across pets | Today's Schedule table, ordered by time regardless of entry order |
+| Conflict detection | The 08:00/08:15 overlap, and two tasks sharing a 17:30 start |
+| Status filtering | The outstanding/done counters, and the plan ignoring completed tasks |
+| Filtering by pet | The Filter by pet dropdown |
+| Time-budgeted planning | Generate plan, with the dropped-tasks warning |
+| Plan explanation | The "Why these tasks" list under the plan |
+| Automatic recurrence | Completing a daily task, and the follow-up toast |
+
+### Sample CLI output
+
+The same logic, driven from the terminal with `python main.py`:
+
+```
+PawPal+ -- Jordan Vega (jordan@example.com)
+-------------------------------------------
+  Milo (Beagle), dog, age 4
+    diet: grain-free kibble only
+    tasks on file: 3
+  Luna (Tabby), cat, age 2
+    diet: allergic to chicken
+    tasks on file: 4
+
+As entered (unsorted)
+---------------------
+  19:00  Milo: Brush Coat
+  08:00  Milo: Park Walk
+  17:30  Milo: Evening Kibble
+  08:15  Luna: Morning Kibble
+  09:00  Luna: Ear Drops
+  18:00  Luna: Wand Play
+  17:30  Luna: Evening Pouch
+
+Today's Schedule
+----------------
+  08:00-08:45  Milo  Park Walk        45 min  high   todo (with Jordan)
+  08:15-08:25  Luna  Morning Kibble   10 min  high   todo
+  09:00-09:05  Luna  Ear Drops         5 min  medium todo (with Alex)
+  17:30-17:40  Milo  Evening Kibble   10 min  high   todo
+  17:30-17:40  Luna  Evening Pouch    10 min  high   todo
+  18:00-18:15  Luna  Wand Play        15 min  medium todo
+  19:00-19:20  Milo  Brush Coat       20 min  low    todo
+
+Filtered by pet
+---------------
+  Milo (3 tasks)
+    08:00  Park Walk
+    17:30  Evening Kibble
+    19:00  Brush Coat
+  Luna (4 tasks)
+    08:15  Morning Kibble
+    09:00  Ear Drops
+    17:30  Evening Pouch
+    18:00  Wand Play
+
+Scheduling conflicts
+--------------------
+  WARNING: Milo and Luna both need attention at once -- Park Walk runs 08:00-08:45 but Morning Kibble starts 08:15
+  WARNING: Milo and Luna both need attention at once -- Evening Kibble runs 17:30-17:40 but Evening Pouch starts 17:30
+  reported as warnings, so the program keeps running
+
+Progress so far
+---------------
+  completed (2): Park Walk, Morning Kibble
+  remaining (5): Brush Coat, Evening Kibble, Ear Drops, Wand Play, Evening Pouch
+
+Plan for a 30-minute budget
+---------------------------
+  09:00-09:05 Ear Drops (5 min) [medium] -- Alex -- medium priority medication for Luna
+  17:30-17:40 Evening Kibble (10 min) [high] -- high priority feeding for Milo; overlaps another task, so one needs moving
+  17:30-17:40 Evening Pouch (10 min) [high] -- high priority feeding for Luna; overlaps another task, so one needs moving
+  uses 25 of 30 minutes
+  dropped, lowest priority first:
+    Brush Coat (20 min, low priority)
+    Wand Play (15 min, medium priority)
+
+Recurring tasks
+---------------
+  completed milo-feed-pm, which is a daily task
+  follow-up created automatically: milo-evening-kibble-2026-10-11
+  due 2026-10-11 at 17:30, not completed
+  Milo's task count went 3 -> 4
+```
+
+**Screenshots** *(optional)*: <!-- Add screenshots here for human reviewers if you like -->

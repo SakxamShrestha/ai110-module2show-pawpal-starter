@@ -261,6 +261,88 @@ demo and reading the output. That caught real problems, but it is weaker evidenc
 test suite, so I went back and wrote assertions for every algorithmic method. Coverage is
 now 86%.
 
+**c. AI strategy**
+
+**Which assistant features were most effective?**
+
+Three, in order.
+
+*Agent mode with file access and a terminal* did the most work. Because the assistant could
+run `python main.py` and `python -m pytest` itself and read the output, it caught its own
+mistakes before I saw them. The difference between an assistant that writes code and one
+that runs code is large: a generated `handle_recurring()` looks fine on the page, and only
+executing it shows that the demo's 60-minute budget was hiding the very behavior the demo
+existed to show.
+
+*Asking for a critique instead of code.* My single most useful prompt was "review this
+skeleton for missing relationships and logic bottlenecks." It returned six concrete
+problems, including the one that would have cost me the most time: `Owner.get_all_tasks()`
+returning `list[tuple[Pet, Task]]` while every `Scheduler` method accepted `list[Task]`.
+Neither class was wrong on its own, so rereading either would never have found it.
+
+*Asking how a mechanism works, rather than for the code that uses it.* "How should the
+Scheduler retrieve tasks from the Owner?" and "how does `st.session_state` persist an
+object?" both taught me a principle I then applied myself. That is a different and more
+durable outcome than receiving a block to paste.
+
+**One suggestion I rejected, and one I modified.**
+
+Rejected: a `Caretaker` class to replace the `assigned_to` string. The argument was
+reasonable -- a free string means "Alex", "alex", and "Alex " are three different people --
+but nothing in PawPal+ queries a caretaker's workload, and a class that exists to hold one
+name is more structure than my problem has. I kept the string and recorded the reasoning so
+the decision reads as deliberate rather than lazy.
+
+Modified: when I asked how `detect_conflicts()` could be simplified, I was offered a
+one-line comprehension over `itertools.combinations`. It is genuinely more Pythonic. I
+measured both on identical inputs: same results, but my explicit loop sorts first and
+breaks as soon as a later task starts after the current one ends, which made it about
+fourteen times faster on 400 tasks. I kept mine -- not for the speed, since no owner has 400
+tasks, but because the early break is what makes the sorting *mean* something. The
+comprehension reads better and quietly hides that it is quadratic.
+
+**Did separate chat sessions per phase help?**
+
+I should be straight about this: I did not work in separate sessions. I built the whole
+project in one continuous conversation, and that was a real tradeoff rather than simple
+laziness.
+
+What the single session bought me was continuity. When I reached the UI phase, the
+assistant already knew that `Task` carried a `pet_id`, why `Scheduler` was stateless, and
+that I had rejected the `Caretaker` class -- so it wired `app.py` to `Owner.complete_task()`
+without being told the recurrence design twice. When I expanded the test suite, it knew
+which edge cases I had checked by hand and which I had not. A fresh session would have
+needed all of that re-explained, and I would probably have explained it slightly
+differently each time.
+
+What it cost me was focus. Context accumulated, and a few times I had to restate what
+phase I was in. The place where separate sessions would clearly have helped is the design
+review in Phase 1: a reviewer that had not just written my skeleton would have been a
+harsher critic of it. Reviewing your own work has the same weakness whether you are a
+person or a model.
+
+**On being the lead architect.**
+
+The pattern that worked was: I decide the shape, the assistant fills it in, and I verify by
+running it. Every consequential decision in this project was mine -- one generalized `Task`
+instead of per-activity methods, a stateless `Scheduler`, `pet_id` over passing pairs
+everywhere, everything in one `pawpal_system.py` instead of a package, keeping the readable
+loop over the clever comprehension. The assistant proposed alternatives for most of those,
+and several of its proposals were good. Choosing between them was the part I could not
+delegate, because the choices only make sense against what I wanted the system to be.
+
+The sharpest lesson is that volume of output is not progress. The assistant could produce a
+plausible scheduler faster than I could read one, and the limiting factor was never its
+typing speed -- it was my understanding. Twice I accepted something that ran correctly and
+proved the wrong thing: the 60-minute budget that dropped nothing, and a two-test suite at
+49% coverage that implied more verification than it had done. Both looked like finished
+work. Catching that is the architect's job, and it is not automatable, because it requires
+knowing what the system is *for*.
+
+The other half is being willing to say no with a reason. Rejecting the `Caretaker` class
+was not about the suggestion being wrong; it was about scope belonging to me. An assistant
+optimizes the thing you point it at, and pointing it is the whole job.
+
 ---
 
 ## 4. Testing and Verification
