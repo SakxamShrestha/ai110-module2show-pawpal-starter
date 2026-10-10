@@ -1,5 +1,5 @@
 classDiagram
-    %% PawPal+ class design
+    %% PawPal+ class design -- matches pawpal_system.py
     %% Owner holds Pets, Pet holds Tasks, Scheduler is a stateless service over Tasks.
 
     class Owner {
@@ -8,8 +8,9 @@ classDiagram
         +str phone
         +list~Pet~ pets
         +add_pet(pet: Pet) None
-        +get_all_tasks() list~tuple~Pet, Task~~
+        +get_all_tasks() list~Task~
         +find_pet(name: str) Pet|None
+        +find_pet_by_id(pet_id: str) Pet|None
     }
 
     class Pet {
@@ -27,26 +28,37 @@ classDiagram
 
     class Task {
         +str id
+        +str pet_id
         +str title
-        +str description
         +str category
         +str time_str
+        +int duration_minutes
+        +str priority
         +str frequency
+        +str description
+        +date due_date
         +str assigned_to
         +bool is_completed
         +mark_complete() None
         +mark_pending() None
+        +start_minutes() int
+        +end_minutes() int
+        +overlaps(other: Task) bool
+        +new_id(pet_id: str, title: str, when: str) str
     }
 
     class Scheduler {
         +Owner owner
         +sort_by_time(tasks: list~Task~) list~Task~
         +filter_by_status(tasks: list~Task~, completed: bool) list~Task~
-        +detect_conflicts(tasks: list~Task~) list~str~
+        +detect_conflicts(tasks: list~Task~) list~tuple~Task, Task~~
         +handle_recurring(task: Task) Task|None
+        +plan_day(minutes_available: int) list~Task~
+        +explain_plan(plan: list~Task~) list~str~
     }
 
     Owner "1" *-- "0..*" Pet : owns
     Pet "1" *-- "0..*" Task : schedules
-    Scheduler ..> Owner : reads
+    Task ..> Pet : pet_id refers to
+    Scheduler --> Owner : plans for
     Scheduler ..> Task : organizes
