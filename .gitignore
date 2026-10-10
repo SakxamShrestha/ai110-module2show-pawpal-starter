@@ -3,3 +3,5 @@ __pycache__/
 .venv_new/
 .pytest_cache/
 .DS_Store
+# Instructor-provided rubric, not part of the submission
+grading_scheme.md
