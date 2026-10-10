@@ -1,15 +1,52 @@
 classDiagram
-    %% Replace the placeholders below with your actual classes, attributes, methods, and relationships.
-    %% Keep this file updated so it matches your final implementation.
+    %% PawPal+ class design
+    %% Owner holds Pets, Pet holds Tasks, Scheduler is a stateless service over Tasks.
 
-    class ClassName {
-        +type attribute
-        +method() returnType
+    class Owner {
+        +str name
+        +str email
+        +str phone
+        +list~Pet~ pets
+        +add_pet(pet: Pet) None
+        +get_all_tasks() list~tuple~Pet, Task~~
+        +find_pet(name: str) Pet|None
     }
 
-    class AnotherClass {
-        +type attribute
-        +method() returnType
+    class Pet {
+        +str id
+        +str name
+        +str species
+        +str breed
+        +int age
+        +str dietary_notes
+        +list~Task~ tasks
+        +add_task(task: Task) None
+        +remove_task(task_id: str) bool
+        +get_pending_tasks() list~Task~
     }
 
-    ClassName --> AnotherClass : relationship
+    class Task {
+        +str id
+        +str title
+        +str description
+        +str category
+        +str time_str
+        +str frequency
+        +str assigned_to
+        +bool is_completed
+        +mark_complete() None
+        +mark_pending() None
+    }
+
+    class Scheduler {
+        +Owner owner
+        +sort_by_time(tasks: list~Task~) list~Task~
+        +filter_by_status(tasks: list~Task~, completed: bool) list~Task~
+        +detect_conflicts(tasks: list~Task~) list~str~
+        +handle_recurring(task: Task) Task|None
+    }
+
+    Owner "1" *-- "0..*" Pet : owns
+    Pet "1" *-- "0..*" Task : schedules
+    Scheduler ..> Owner : reads
+    Scheduler ..> Task : organizes
