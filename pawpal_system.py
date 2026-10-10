@@ -48,6 +48,25 @@ def format_minutes(total_minutes: int) -> str:
     return f"{hours:02d}:{minutes:02d}"
 
 
+def next_occurrence(task: "Task") -> Optional["Task"]:
+    """Build the follow-up for a completed recurring task, or None.
+
+    Lives at module level because both Scheduler.handle_recurring() and
+    Pet.complete_task() need it, and Pet must not depend on Scheduler.
+    """
+    if not task.is_completed or not task.repeats():
+        return None
+    step = _FREQUENCY_DAYS[task.frequency]
+    base = task.due_date or date.today()
+    next_date = base + timedelta(days=step)
+    return replace(
+        task,
+        id=Task.new_id(task.pet_id, task.title, next_date.isoformat()),
+        due_date=next_date,
+        is_completed=False,
+    )
+
+
 @dataclass
 class Task:
     """A single unit of pet care.
@@ -166,6 +185,29 @@ class Pet:
         """Return this pet's tasks that are not yet completed."""
         return [task for task in self.tasks if not task.is_completed]
 
+    def find_task(self, task_id: str) -> Optional[Task]:
+        """Look up one of this pet's tasks by id."""
+        for task in self.tasks:
+            if task.id == task_id:
+                return task
+        return None
+
+    def complete_task(self, task_id: str) -> Optional[Task]:
+        """Mark a task complete and, if it recurs, schedule its next occurrence.
+
+        Returns the newly created follow-up task, or None when the task does
+        not repeat. This is the automatic path: callers that want to complete a
+        task without spawning anything call Task.mark_complete() directly.
+        """
+        task = self.find_task(task_id)
+        if task is None:
+            return None
+        task.mark_complete()
+        follow_up = next_occurrence(task)
+        if follow_up is not None:
+            self.add_task(follow_up)
+        return follow_up
+
     def label(self) -> str:
         """Return a display name, including breed when one is known."""
         return f"{self.name} ({self.breed})" if self.breed else self.name
@@ -209,6 +251,13 @@ class Owner:
                 return pet
         return None
 
+    def complete_task(self, task_id: str) -> Optional[Task]:
+        """Complete a task belonging to any pet, spawning a follow-up if it recurs."""
+        for pet in self.pets:
+            if pet.find_task(task_id) is not None:
+                return pet.complete_task(task_id)
+        return None
+
 
 @dataclass
 class Scheduler:
@@ -245,6 +294,18 @@ class Scheduler:
         """Return only the tasks whose is_completed matches `completed`."""
         return [task for task in tasks if task.is_completed == completed]
 
+    def filter_by_pet(self, tasks: List[Task], pet_name: str) -> List[Task]:
+        """Return only the tasks belonging to the named pet.
+
+        Matches on the pet's id when the name resolves through the owner, and
+        falls back to comparing pet_id directly so the method still works on a
+        hand-built list with no owner attached.
+        """
+        target = pet_name.strip().lower()
+        pet = self.owner.find_pet(pet_name) if self.owner is not None else None
+        pet_id = pet.id if pet is not None else target
+        return [task for task in tasks if task.pet_id.lower() == pet_id.lower()]
+
     def detect_conflicts(self, tasks: List[Task]) -> List[Tuple[Task, Task]]:
         """Return each pair of tasks whose time ranges overlap.
 
@@ -263,24 +324,37 @@ class Scheduler:
                     conflicts.append((task, other))
         return conflicts
 
+    def conflict_warnings(self, tasks: List[Task]) -> List[str]:
+        """Return a readable warning per overlapping pair, never raising.
+
+        A conflict is something for the owner to resolve, not an error, so this
+        reports and returns rather than interrupting the program.
+        """
+        warnings = []
+        for first, second in self.detect_conflicts(tasks):
+            same_pet = first.pet_id == second.pet_id
+            who = (
+                f"{self.pet_name_for(first)} has two tasks booked at once"
+                if same_pet
+                else f"{self.pet_name_for(first)} and {self.pet_name_for(second)} "
+                "both need attention at once"
+            )
+            warnings.append(
+                f"WARNING: {who} -- {first.title} runs "
+                f"{first.time_str}-{format_minutes(first.end_minutes())} but "
+                f"{second.title} starts {second.time_str}"
+            )
+        return warnings
+
     def handle_recurring(self, task: Task) -> Optional[Task]:
         """Build the next occurrence of a completed recurring task.
 
-        Returns a new Task; the caller appends it, so a list being iterated is
+        Returns a new Task without attaching it, so a list being iterated is
         never mutated mid-loop. Returns None when the task does not repeat or is
-        not yet complete.
+        not yet complete. For the automatic path that also attaches the result,
+        use Pet.complete_task() or Owner.complete_task().
         """
-        if not task.is_completed or not task.repeats():
-            return None
-        step = _FREQUENCY_DAYS[task.frequency]
-        base = task.due_date or date.today()
-        next_date = base + timedelta(days=step)
-        return replace(
-            task,
-            id=Task.new_id(task.pet_id, task.title, next_date.isoformat()),
-            due_date=next_date,
-            is_completed=False,
-        )
+        return next_occurrence(task)
 
     def plan_day(self, minutes_available: Optional[int] = None) -> List[Task]:
         """Build today's plan across every pet in self.owner.

@@ -196,8 +196,14 @@ for task in scheduler.sort_by_time(all_tasks):
         "done", value=task.is_completed, key=f"done-{task.id}", label_visibility="hidden"
     )
     if is_done != task.is_completed:
-        # Task owns its own status, so the UI only flips the switch.
-        task.mark_complete() if is_done else task.mark_pending()
+        if is_done:
+            # Owner.complete_task marks it done and, for a daily or weekly
+            # task, attaches the next occurrence by itself.
+            follow_up = owner.complete_task(task.id)
+            if follow_up is not None:
+                st.toast(f"Next {follow_up.title} scheduled for {follow_up.due_date}.")
+        else:
+            task.mark_pending()
         st.rerun()
 
     label = (
@@ -214,18 +220,25 @@ for task in scheduler.sort_by_time(all_tasks):
             st.rerun()
 
 # --------------------------------------------------------------------------
+# One pet at a time
+# --------------------------------------------------------------------------
+with st.expander("Filter by pet"):
+    chosen = st.selectbox(
+        "Show tasks for", [pet.name for pet in owner.pets], key="filter-pet"
+    )
+    mine = scheduler.sort_by_time(scheduler.filter_by_pet(all_tasks, chosen))
+    st.caption(f"{len(mine)} tasks for {chosen}")
+    for task in mine:
+        st.markdown(f"- `{task.time_str}` {task.title} ({task.category})")
+
+# --------------------------------------------------------------------------
 # Conflicts
 # --------------------------------------------------------------------------
-conflicts = scheduler.detect_conflicts(all_tasks)
-if conflicts:
+warnings = scheduler.conflict_warnings(all_tasks)
+if warnings:
     st.subheader("Scheduling conflicts")
-    for first, second in conflicts:
-        st.warning(
-            f"{scheduler.pet_name_for(first)}'s {first.title} runs to "
-            f"{format_minutes(first.end_minutes())}, but "
-            f"{scheduler.pet_name_for(second)}'s {second.title} starts at "
-            f"{second.time_str}."
-        )
+    for warning in warnings:
+        st.warning(warning.removeprefix("WARNING: "))
 
 # --------------------------------------------------------------------------
 # Plan the day against a time budget
@@ -251,30 +264,3 @@ if st.button("Generate plan", type="primary"):
                 f"- {task.title} for {scheduler.pet_name_for(task)} "
                 f"({task.duration_minutes} min, {task.priority} priority)"
             )
-
-# --------------------------------------------------------------------------
-# Recurring tasks
-# --------------------------------------------------------------------------
-completed_recurring = [
-    task for task in all_tasks if task.is_completed and task.repeats()
-]
-if completed_recurring:
-    st.subheader("Recurring tasks")
-    st.caption(
-        f"{len(completed_recurring)} completed recurring tasks can roll over to "
-        "their next occurrence."
-    )
-    if st.button("Roll over completed recurring tasks"):
-        # Collect first, attach second: appending inside the loop would mutate
-        # the list being iterated.
-        spawned = []
-        for task in completed_recurring:
-            next_task = scheduler.handle_recurring(task)
-            if next_task is not None:
-                spawned.append(next_task)
-        for next_task in spawned:
-            pet = owner.find_pet_by_id(next_task.pet_id)
-            if pet is not None:
-                pet.add_task(next_task)
-        st.success(f"Created {len(spawned)} follow-up tasks.")
-        st.rerun()

@@ -9,8 +9,10 @@ classDiagram
         +list~Pet~ pets
         +add_pet(pet: Pet) None
         +get_all_tasks() list~Task~
+        +get_all_pending_tasks() list~Task~
         +find_pet(name: str) Pet|None
         +find_pet_by_id(pet_id: str) Pet|None
+        +complete_task(task_id: str) Task|None
     }
 
     class Pet {
@@ -24,6 +26,9 @@ classDiagram
         +add_task(task: Task) None
         +remove_task(task_id: str) bool
         +get_pending_tasks() list~Task~
+        +find_task(task_id: str) Task|None
+        +complete_task(task_id: str) Task|None
+        +label() str
     }
 
     class Task {
@@ -44,17 +49,24 @@ classDiagram
         +start_minutes() int
         +end_minutes() int
         +overlaps(other: Task) bool
+        +priority_rank() int
+        +repeats() bool
         +new_id(pet_id: str, title: str, when: str) str
+        +describe() str
     }
 
     class Scheduler {
         +Owner owner
         +sort_by_time(tasks: list~Task~) list~Task~
         +filter_by_status(tasks: list~Task~, completed: bool) list~Task~
+        +filter_by_pet(tasks: list~Task~, pet_name: str) list~Task~
         +detect_conflicts(tasks: list~Task~) list~tuple~Task, Task~~
+        +conflict_warnings(tasks: list~Task~) list~str~
         +handle_recurring(task: Task) Task|None
         +plan_day(minutes_available: int) list~Task~
         +explain_plan(plan: list~Task~) list~str~
+        +dropped_from_plan(plan: list~Task~) list~Task~
+        +pet_name_for(task: Task) str
     }
 
     Owner "1" *-- "0..*" Pet : owns
@@ -62,3 +74,4 @@ classDiagram
     Task ..> Pet : pet_id refers to
     Scheduler --> Owner : plans for
     Scheduler ..> Task : organizes
+    note for Scheduler "handle_recurring() and Pet.complete_task()\nboth call the module function next_occurrence()" 

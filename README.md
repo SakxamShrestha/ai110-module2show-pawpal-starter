@@ -61,7 +61,17 @@ PawPal+ -- Jordan Vega (jordan@example.com)
     tasks on file: 3
   Luna (Tabby), cat, age 2
     diet: allergic to chicken
-    tasks on file: 3
+    tasks on file: 4
+
+As entered (unsorted)
+---------------------
+  19:00  Milo: Brush Coat
+  08:00  Milo: Park Walk
+  17:30  Milo: Evening Kibble
+  08:15  Luna: Morning Kibble
+  09:00  Luna: Ear Drops
+  18:00  Luna: Wand Play
+  17:30  Luna: Evening Pouch
 
 Today's Schedule
 ----------------
@@ -69,46 +79,71 @@ Today's Schedule
   08:15-08:25  Luna  Morning Kibble   10 min  high   todo
   09:00-09:05  Luna  Ear Drops         5 min  medium todo (with Alex)
   17:30-17:40  Milo  Evening Kibble   10 min  high   todo
+  17:30-17:40  Luna  Evening Pouch    10 min  high   todo
   18:00-18:15  Luna  Wand Play        15 min  medium todo
   19:00-19:20  Milo  Brush Coat       20 min  low    todo
 
+Filtered by pet
+---------------
+  Milo (3 tasks)
+    08:00  Park Walk
+    17:30  Evening Kibble
+    19:00  Brush Coat
+  Luna (4 tasks)
+    08:15  Morning Kibble
+    09:00  Ear Drops
+    17:30  Evening Pouch
+    18:00  Wand Play
+
 Scheduling conflicts
 --------------------
-  08:00 Milo's Park Walk runs until 08:45, but Luna's Morning Kibble starts 08:15
-  the owner cannot be in two places at once, so one needs moving
+  WARNING: Milo and Luna both need attention at once -- Park Walk runs 08:00-08:45 but Morning Kibble starts 08:15
+  WARNING: Milo and Luna both need attention at once -- Evening Kibble runs 17:30-17:40 but Evening Pouch starts 17:30
+  reported as warnings, so the program keeps running
 
 Progress so far
 ---------------
   completed (2): Park Walk, Morning Kibble
-  remaining (4): Evening Kibble, Brush Coat, Ear Drops, Wand Play
+  remaining (5): Brush Coat, Evening Kibble, Ear Drops, Wand Play, Evening Pouch
 
 Plan for a 30-minute budget
 ---------------------------
   09:00-09:05 Ear Drops (5 min) [medium] -- Alex -- medium priority medication for Luna
-  17:30-17:40 Evening Kibble (10 min) [high] -- high priority feeding for Milo
-  18:00-18:15 Wand Play (15 min) [medium] -- medium priority enrichment for Luna
-  uses 30 of 30 minutes
+  17:30-17:40 Evening Kibble (10 min) [high] -- high priority feeding for Milo; overlaps another task, so one needs moving
+  17:30-17:40 Evening Pouch (10 min) [high] -- high priority feeding for Luna; overlaps another task, so one needs moving
+  uses 25 of 30 minutes
   dropped, lowest priority first:
     Brush Coat (20 min, low priority)
+    Wand Play (15 min, medium priority)
 
 Recurring tasks
 ---------------
-  Park Walk is daily and was completed on 2026-10-10
-  next occurrence: milo-park-walk-2026-10-11 due 2026-10-11 at 08:00
+  completed milo-feed-pm, which is a daily task
+  follow-up created automatically: milo-evening-kibble-2026-10-11
+  due 2026-10-11 at 17:30, not completed
+  Milo's task count went 3 -> 4
 ```
 
 What each section shows:
 
+- **As entered (unsorted)** -- the tasks in insertion order. They are deliberately added
+  out of order (Milo's 19:00 grooming first), so the next section proves the sorting is
+  real rather than an accident of how they were entered.
 - **Today's Schedule** -- `Scheduler.sort_by_time()` merging both pets' tasks into one
   chronological list.
-- **Scheduling conflicts** -- `Scheduler.detect_conflicts()` catching an overlap *across*
-  pets: Milo's walk runs to 08:45 while Luna's feeding starts at 08:15.
+- **Filtered by pet** -- `Scheduler.filter_by_pet()` pulling one pet's tasks back out of
+  the combined list.
+- **Scheduling conflicts** -- `Scheduler.conflict_warnings()` reporting two kinds of clash:
+  an overlap (Milo's walk runs to 08:45 while Luna's feeding starts 08:15) and an identical
+  start time (both pets' evening feeds at 17:30). Returned as warning strings, so the
+  program keeps running.
 - **Progress so far** -- `Scheduler.filter_by_status()` splitting done from outstanding.
 - **Plan for a 30-minute budget** -- `Scheduler.plan_day()` keeping the most important
   work that fits the time available, with `explain_plan()` giving the reason per line and
   `dropped_from_plan()` naming what was cut.
-- **Recurring tasks** -- `Scheduler.handle_recurring()` spawning tomorrow's occurrence of
-  a completed daily task.
+- **Recurring tasks** -- `Owner.complete_task()` completing a daily task and creating its
+  follow-up automatically; Milo's task count goes from 3 to 4 without the caller asking
+  for a new task.
 
 ## 🧪 Testing PawPal+
 
@@ -146,20 +181,21 @@ Both tests pass. They cover the two state changes the rest of the system depends
 | `test_mark_complete_changes_status` | `Task.mark_complete()` sets `is_completed` to `True`, and `mark_pending()` returns it to `False`. The test asserts the starting state first, so it cannot pass against a method that does nothing. |
 | `test_add_task_increases_pet_task_count` | `Pet.add_task()` grows the pet's task list (0 → 1 → 2) and stamps the task with the pet's own `id`, which is the link the scheduler relies on to attribute a task to a pet. |
 
-Line coverage of `pawpal_system.py` is currently **49%** (176 statements, 90 uncovered):
+Line coverage of `pawpal_system.py` is currently **44%** (209 statements, 117 uncovered):
 
 ```
 Name               Stmts   Miss  Cover
 ------------------------------------------------
-pawpal_system.py     176     90    49%
-TOTAL                176     90    49%
+pawpal_system.py     209    117    44%
+TOTAL                209    117    44%
 ```
 
 Covered: `Task` construction and validation, `mark_complete`, `mark_pending`, and
 `Pet.add_task`. Not yet covered by automated tests: the `Scheduler` methods
-(`sort_by_time`, `filter_by_status`, `detect_conflicts`, `handle_recurring`,
-`plan_day`), which are currently verified by running `main.py` and reading its output
-rather than by assertions.
+(`sort_by_time`, `filter_by_status`, `filter_by_pet`, `detect_conflicts`,
+`conflict_warnings`, `handle_recurring`, `plan_day`) and the automatic recurrence path
+(`Pet.complete_task`), which are currently verified by running `main.py` and reading its
+output rather than by assertions.
 
 ## 📐 Smarter Scheduling
 
@@ -171,9 +207,10 @@ across the whole household rather than one pet at a time.
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
 | Task sorting | `Scheduler.sort_by_time()`, `Task.start_minutes()` | Chronological. Times are converted to minutes since midnight rather than compared as text, so `"9:00"` cannot sort after `"17:30"`. Ties break on priority then title, so repeat runs give identical output. |
-| Filtering | `Scheduler.filter_by_status()`, `Pet.get_pending_tasks()`, `Owner.get_all_pending_tasks()` | Splits done from outstanding. `plan_day()` builds on this to drop work that does not fit the time available. |
-| Conflict handling | `Scheduler.detect_conflicts()`, `Task.overlaps()` | Compares time *ranges*, not start times: an 08:00 walk lasting 45 minutes collides with an 08:15 feeding. Returns the task pairs so a caller can act on them. Tasks that merely touch end-to-start do not count as conflicts. |
-| Recurring tasks | `Scheduler.handle_recurring()`, `Task.repeats()`, `Task.new_id()` | `daily` advances one day, `weekly` seven, `once` never repeats. Only fires on a completed task. Returns the new occurrence instead of appending it, so a list being iterated is never mutated mid-loop. |
+| Filtering by status | `Scheduler.filter_by_status()`, `Pet.get_pending_tasks()`, `Owner.get_all_pending_tasks()` | Splits done from outstanding. `plan_day()` builds on this to drop work that does not fit the time available. |
+| Filtering by pet | `Scheduler.filter_by_pet()` | Pulls one pet's tasks out of the combined household list. Resolves a pet *name* to its id through the owner, and falls back to matching `pet_id` directly so it still works on a hand-built list with no owner attached. |
+| Conflict handling | `Scheduler.detect_conflicts()`, `Scheduler.conflict_warnings()`, `Task.overlaps()` | Compares time *ranges*, not start times: an 08:00 walk lasting 45 minutes collides with an 08:15 feeding, and two tasks at the same 17:30 collide too. `detect_conflicts()` returns the task pairs so a caller can act on them; `conflict_warnings()` wraps them as readable strings and never raises, because a clash is the owner's to resolve, not a program error. Tasks that merely touch end-to-start do not count. |
+| Recurring tasks | `Pet.complete_task()`, `Owner.complete_task()`, `next_occurrence()`, `Scheduler.handle_recurring()`, `Task.repeats()`, `Task.new_id()` | `daily` advances one day via `timedelta(days=1)`, `weekly` seven, `once` never repeats. Completing a recurring task through `Pet.complete_task()` or `Owner.complete_task()` attaches the follow-up automatically. `Scheduler.handle_recurring()` is the manual form: it returns the new occurrence without attaching it, so a list being iterated is never mutated mid-loop. |
 | Time-budgeted planning | `Scheduler.plan_day()`, `dropped_from_plan()` | Spends a fixed number of available minutes on the most important outstanding tasks first, then returns the kept set in clock order. What gets dropped is decided by priority, not by position in the day. |
 | Plan explanation | `Scheduler.explain_plan()`, `Task.describe()` | One line per task giving its time window, pet, duration, priority, and why it was scheduled, plus a note when it overlaps another task. |
 

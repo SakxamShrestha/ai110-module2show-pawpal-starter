@@ -160,6 +160,33 @@ It also means the result is reproducible. Sorting breaks ties on priority and th
 so the same input always produces the same plan, which made the behavior straightforward
 to verify by running the demo.
 
+**A second tradeoff, in conflict detection.** My first version only flagged tasks with
+*identical* timestamps. That was simpler, but it was wrong once tasks had durations: an
+08:00 walk lasting 45 minutes genuinely collides with an 08:15 feeding, and exact matching
+reported nothing. I changed it to compare time ranges (`start_a < end_b and start_b <
+end_a`), which catches both the identical-time case and the overlap case. The cost is that
+"conflict" is now a judgement about the owner's attention rather than a simple equality
+check, and tasks that merely touch end-to-start deliberately do not count.
+
+**Readability versus speed, when I reviewed the code.** I asked for a simplification of
+`detect_conflicts()` and was offered a one-line comprehension:
+
+```python
+return [(a, b) for a, b in combinations(self.sort_by_time(tasks), 2) if a.overlaps(b)]
+```
+
+That is shorter and more Pythonic than my explicit nested loop. I measured both on
+identical inputs: results matched exactly, but because the comprehension compares every
+pair while my loop sorts first and breaks out as soon as a later task starts after the
+current one ends, the loop was roughly 14 times faster on 400 tasks (17ms versus 250ms).
+
+I kept my version, and the reason is not the speed. A pet owner will never have 400 tasks,
+so at realistic sizes the difference is a fraction of a millisecond and the one-liner would
+have been fine. I kept it because the early break is the thing that makes the algorithm
+express *why* sorting matters -- once the list is in time order, you can stop looking. The
+comprehension hides that and is quietly quadratic. Four extra lines that state the
+reasoning are worth more to me than four fewer lines that conceal it.
+
 ---
 
 ## 3. AI Collaboration
