@@ -1,8 +1,7 @@
 classDiagram
-    %% Superseded by uml_final.mmd, which is the authoritative final diagram.
-    %% Kept because earlier phases referenced this filename.
-    %% PawPal+ class design -- matches pawpal_system.py
-    %% Owner holds Pets, Pet holds Tasks, Scheduler is a stateless service over Tasks.
+    %% PawPal+ final architecture -- matches pawpal_system.py as built.
+    %% Data nests from the outside in: Owner holds Pets, Pet holds Tasks.
+    %% Scheduler is a service beside that data, not a container of it.
 
     class Owner {
         +str name
@@ -15,6 +14,10 @@ classDiagram
         +find_pet(name: str) Pet|None
         +find_pet_by_id(pet_id: str) Pet|None
         +complete_task(task_id: str) Task|None
+        +to_dict() dict
+        +from_dict(data: dict) Owner
+        +save_to_json(path: str) str
+        +load_from_json(path: str) Owner|None
     }
 
     class Pet {
@@ -31,6 +34,8 @@ classDiagram
         +find_task(task_id: str) Task|None
         +complete_task(task_id: str) Task|None
         +label() str
+        +to_dict() dict
+        +from_dict(data: dict) Pet
     }
 
     class Task {
@@ -55,12 +60,18 @@ classDiagram
         +repeats() bool
         +new_id(pet_id: str, title: str, when: str) str
         +describe() str
+        +icon() str
+        +priority_icon() str
+        +status_icon() str
+        +to_dict() dict
+        +from_dict(data: dict) Task
     }
 
     class Scheduler {
         +Owner owner
         +sort_by_time(tasks: list~Task~) list~Task~
         +filter_by_status(tasks: list~Task~, completed: bool) list~Task~
+        +sort_by_priority(tasks: list~Task~) list~Task~
         +filter_by_pet(tasks: list~Task~, pet_name: str) list~Task~
         +detect_conflicts(tasks: list~Task~) list~tuple~Task, Task~~
         +conflict_warnings(tasks: list~Task~) list~str~
@@ -68,12 +79,23 @@ classDiagram
         +plan_day(minutes_available: int) list~Task~
         +explain_plan(plan: list~Task~) list~str~
         +dropped_from_plan(plan: list~Task~) list~Task~
+        +next_available_slot(duration_minutes: int, tasks: list~Task~) str|None
         +pet_name_for(task: Task) str
     }
 
+    %% Composition: deleting a pet takes its tasks with it, and a task has no
+    %% meaning without the pet it belongs to.
     Owner "1" *-- "0..*" Pet : owns
     Pet "1" *-- "0..*" Task : schedules
-    Task ..> Pet : pet_id refers to
-    Scheduler --> Owner : plans for
-    Scheduler ..> Task : organizes
-    note for Scheduler "handle_recurring() and Pet.complete_task() both call the module function next_occurrence()"
+
+    %% Task stores pet_id rather than a Pet reference, which is what lets
+    %% Owner.get_all_tasks() hand the Scheduler one flat list while the UI can
+    %% still resolve a task back to its pet for display.
+    Task ..> Pet : pet_id resolves via Owner.find_pet_by_id()
+
+    %% Dependency, not ownership: the Scheduler reads the household and returns
+    %% results. It stores no tasks, so it can be tested on a hand-built list.
+    Scheduler --> Owner : reads pets and tasks
+    Scheduler ..> Task : sorts, filters, inspects
+
+    note for Scheduler "Stateless: plan_day() pulls from owner, every other method takes tasks as arguments."
