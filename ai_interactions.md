@@ -141,27 +141,60 @@ string and parsed back with `date.fromisoformat()`.
 
 > Compare two different prompts (or two different models) on the same task.
 
-**Not attempted.** This project was built with a single assistant (Claude Code), so there
-is no second model's output to compare against. The table below is left blank rather than
-filled with a guess at what another model would have said.
-
-A good candidate task if this is revisited: the weekly rescheduling logic in
-`handle_recurring()` / `next_occurrence()`, specifically what should happen when a weekly
-task is completed several days late -- does the next occurrence fall seven days from the
-original due date, or seven days from today? PawPal+ currently advances from the stored
-`due_date`, which means a task completed late keeps its original weekday. That is a real
-design question with defensible answers on both sides, which makes it worth putting to two
-models.
+**Task compared.** How a weekly recurring task should behave when it is completed late.
+PawPal+ adds `timedelta(days=7)` to the stored `due_date`, so I asked both models: if a
+weekly task due Monday is not completed until Thursday, should the next occurrence be the
+following Monday (seven days from the due date) or the following Thursday (seven days from
+completion)? I asked each for the reasoning on both sides, a recommendation, and code.
 
 | | Option A | Option B |
 |-|----------|----------|
-| **Model / tool used** | | |
-| **Prompt** | | |
-| **Response summary** | | |
-| **What was useful** | | |
-| **Problems noticed** | | |
-| **Decision** | | |
+| **Model / tool used** | Claude Opus 5, via Claude Code in the terminal (agent mode, with access to the repository) | Google Gemini, via the web chat (no access to the repository) |
+| **Prompt** | Identical wording for both: the weekly-Monday-completed-Thursday question above, asking for reasoning on both sides, a recommendation, and Python code. | Same prompt. |
+| **Response summary** | Recommended anchoring to `due_date` to stop the task drifting through the calendar, and implemented it directly in `pawpal_system.py`. | Framed it as two distinct task types -- *cadence-driven* (weighing, flea treatment: keep the weekday) and *cooldown-driven* (medicated bath: needs a real seven-day gap). Recommended anchoring to `due_date` by default, adding a `strict_cooldown: bool` field for the cooldown case, and advancing the date in whole steps until it lands in the future when a task is badly overdue. |
+| **What was useful** | It could read my actual code, so its answer matched my field names, my `next_occurrence()` structure, and my existing id-generation scheme. It also ran the result. | Two things my own code did not have. First, the **overdue catch-up loop** -- `while next_due <= completed_on: next_due += step` -- which is a genuine bug report, not a preference. Second, the cadence-versus-cooldown framing, which named *why* the two answers both feel right: they are correct for different kinds of task. The worked examples with weekday names made the behavior easy to check. |
+| **Problems noticed** | Being inside the repository made it agree with the shape of what was already there. It defended anchoring to `due_date` without raising the overdue case at all, which is the weakness of asking a model to review code it just wrote. | Its code is a standalone `Task` class, not mine: no `pet_id`, no id regeneration, no `Pet` to attach the new occurrence to, so it could not be pasted in. `strict_cooldown` deliberately skips the catch-up loop, which is defensible but undocumented in its answer. And it offered `strict_cooldown` as a default-off flag without saying what should happen to the many existing tasks that have no opinion either way. |
+| **Decision** | Kept its anchoring choice. | **Adopted the catch-up loop. Declined the `strict_cooldown` flag.** |
 
 **Which approach did you use in your final implementation and why?**
 
-<!-- Your conclusion -->
+I took Gemini's catch-up loop and rejected its `strict_cooldown` flag.
+
+The catch-up loop fixes a real defect, and I verified it was real before changing anything.
+A weekly task due 7 September, completed on 10 October, produced a next occurrence of 14
+September -- a task spawned already three weeks overdue. That is not a design preference, it
+is wrong, and neither I nor the assistant working inside my repository had noticed it.
+`next_occurrence()` now advances in whole weekly steps until the date is in the future,
+which also preserves the weekday: the 7 September task was a Monday and the follow-up lands
+on Monday 12 October. Three tests cover it, including one asserting the weekday survives.
+
+I declined `strict_cooldown` on scope grounds, the same reasoning I used earlier for the
+`Caretaker` class. It is a genuine distinction -- a medicated bath really does need a true
+seven-day gap, and repeating it four days early could irritate a dog's skin, which is a
+better argument than I expected from a model that could not see my code. But PawPal+ has no
+task today that needs it, adding a per-task boolean means every form, table, and
+serialization path has to carry a field that is almost always `False`, and a flag with no
+current user is a liability. I wrote the reasoning down so the option is visible if a real
+need appears.
+
+One process note worth recording: the useful finding came from the model that could *not*
+see my code. Claude Code had written `next_occurrence()` and then reviewed it, and reviewing
+your own work has the same blind spot whether you are a person or a model. Gemini came to
+the question cold and asked what happens in the awkward case. That is the strongest argument
+I found for the exercise -- not that one model is better, but that a reviewer with no
+investment in the existing answer looks in different places.
+
+**Code change this produced** (`pawpal_system.py`, `next_occurrence()`):
+
+```python
+today = completed_on or date.today()
+step = timedelta(days=_FREQUENCY_DAYS[task.frequency])
+base = task.due_date or today
+next_date = base + step
+while next_date <= today:        # adopted from the comparison
+    next_date += step
+```
+
+`completed_on` was added as an injectable parameter at the same time, so the CLI demo can
+pin the clock and print identical dates on every run instead of depending on when it is
+executed.

@@ -416,3 +416,55 @@ def test_saved_task_keeps_working_after_a_reload(tmp_path, household):
     assert task.repeats() is True
     follow_up = restored.find_pet("Milo").complete_task("walk")
     assert follow_up.due_date == date(2026, 10, 11)
+
+
+# ---------------------------------------------------------------------------
+# Late completion of a recurring task
+# ---------------------------------------------------------------------------
+
+
+def test_recurrence_anchors_to_due_date_not_completion_date(household):
+    """A weekly Monday task finished on Thursday stays a Monday task."""
+    milo = household.find_pet("Milo")
+    monday = date(2026, 10, 5)
+    assert monday.strftime("%A") == "Monday"
+    milo.add_task(
+        make_task("bath", "10:00", frequency="weekly", due_date=monday)
+    )
+
+    thursday = date(2026, 10, 8)
+    follow_up = milo.complete_task("bath", completed_on=thursday)
+
+    # Anchored to the due date, so the weekday is preserved. Anchoring to the
+    # completion date would have produced Thursday 15 October and let the task
+    # drift through the calendar on every late finish.
+    assert follow_up.due_date == date(2026, 10, 12)
+    assert follow_up.due_date.strftime("%A") == "Monday"
+
+
+def test_recurrence_catches_up_on_a_task_finished_weeks_late(household):
+    """A long-overdue task spawns a future occurrence, not another overdue one."""
+    milo = household.find_pet("Milo")
+    three_weeks_ago = date(2026, 9, 7)
+    milo.add_task(
+        make_task("bath", "10:00", frequency="weekly", due_date=three_weeks_ago)
+    )
+
+    today = date(2026, 10, 10)
+    follow_up = milo.complete_task("bath", completed_on=today)
+
+    assert follow_up.due_date > today
+    assert follow_up.due_date == date(2026, 10, 12)
+    # Whole weekly steps, so the original weekday survives the catch-up.
+    assert follow_up.due_date.strftime("%A") == three_weeks_ago.strftime("%A")
+
+
+def test_recurrence_advances_one_step_when_not_overdue(household):
+    """A task completed early or on time moves exactly one interval, no further."""
+    milo = household.find_pet("Milo")
+    milo.add_task(
+        make_task("walk", "08:00", frequency="daily", due_date=date(2026, 10, 12))
+    )
+
+    follow_up = milo.complete_task("walk", completed_on=date(2026, 10, 10))
+    assert follow_up.due_date == date(2026, 10, 13)

@@ -321,6 +321,31 @@ review in Phase 1: a reviewer that had not just written my skeleton would have b
 harsher critic of it. Reviewing your own work has the same weakness whether you are a
 person or a model.
 
+**What the model comparison changed.**
+
+I put one design question to a second model, Google Gemini, for the prompt-comparison
+exercise: should a weekly task completed late recur from its original due date or from the
+completion date? Both models recommended anchoring to the due date, which is what PawPal+
+already did, so on the headline question nothing changed.
+
+What did change came from a detail neither I nor Claude Code had raised. Gemini pointed out
+that a task finished long after it was due would spawn an occurrence that is itself already
+overdue. I checked before believing it: a weekly task due 7 September, completed 10 October,
+produced a next occurrence of 14 September. A task created three weeks in the past. That is
+a real bug, and I fixed it by advancing the date in whole steps until it lands in the
+future, which also preserves the weekday.
+
+I declined Gemini's other suggestion, a `strict_cooldown` flag separating tasks that need a
+true seven-day gap (a medicated bath) from tasks that just want a weekday (weighing the
+pet). The distinction is real and better argued than I expected, but no task in PawPal+
+needs it today, and a per-task boolean that is almost always `False` has to be carried
+through every form, table, and save file.
+
+The part worth remembering is which model found the bug: the one that could not see my code.
+Claude Code had written `next_occurrence()` and then reviewed it. Reviewing your own work
+has the same blind spot whether you are a person or a model, and a reviewer with no
+investment in the existing answer looks in different places.
+
 **On being the lead architect.**
 
 The pattern that worked was: I decide the shape, the assistant fills it in, and I verify by

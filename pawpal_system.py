@@ -73,17 +73,36 @@ def format_minutes(total_minutes: int) -> str:
     return f"{hours:02d}:{minutes:02d}"
 
 
-def next_occurrence(task: "Task") -> Optional["Task"]:
+def next_occurrence(
+    task: "Task", completed_on: Optional[date] = None
+) -> Optional["Task"]:
     """Build the follow-up for a completed recurring task, or None.
+
+    The next date is anchored to the task's own due_date, not to when it was
+    actually finished, so a weekly Monday task completed late on Thursday stays
+    a Monday task. Anchoring to the completion date instead would let a task
+    drift forward through the calendar every time the owner ran late.
+
+    A task finished long after it was due would otherwise spawn an occurrence
+    that is itself already overdue, so the date advances in whole steps until it
+    lands in the future.
+
+    `completed_on` defaults to today and exists so callers can pin the clock,
+    which keeps the CLI demo's output identical on every run.
 
     Lives at module level because both Scheduler.handle_recurring() and
     Pet.complete_task() need it, and Pet must not depend on Scheduler.
     """
     if not task.is_completed or not task.repeats():
         return None
-    step = _FREQUENCY_DAYS[task.frequency]
-    base = task.due_date or date.today()
-    next_date = base + timedelta(days=step)
+
+    today = completed_on or date.today()
+    step = timedelta(days=_FREQUENCY_DAYS[task.frequency])
+    base = task.due_date or today
+    next_date = base + step
+    while next_date <= today:
+        next_date += step
+
     return replace(
         task,
         id=Task.new_id(task.pet_id, task.title, next_date.isoformat()),
@@ -243,18 +262,21 @@ class Pet:
                 return task
         return None
 
-    def complete_task(self, task_id: str) -> Optional[Task]:
+    def complete_task(
+        self, task_id: str, completed_on: Optional[date] = None
+    ) -> Optional[Task]:
         """Mark a task complete and, if it recurs, schedule its next occurrence.
 
         Returns the newly created follow-up task, or None when the task does
         not repeat. This is the automatic path: callers that want to complete a
         task without spawning anything call Task.mark_complete() directly.
+        `completed_on` defaults to today.
         """
         task = self.find_task(task_id)
         if task is None:
             return None
         task.mark_complete()
-        follow_up = next_occurrence(task)
+        follow_up = next_occurrence(task, completed_on)
         if follow_up is not None:
             self.add_task(follow_up)
         return follow_up
@@ -361,11 +383,13 @@ class Owner:
         except FileNotFoundError:
             return None
 
-    def complete_task(self, task_id: str) -> Optional[Task]:
+    def complete_task(
+        self, task_id: str, completed_on: Optional[date] = None
+    ) -> Optional[Task]:
         """Complete a task belonging to any pet, spawning a follow-up if it recurs."""
         for pet in self.pets:
             if pet.find_task(task_id) is not None:
-                return pet.complete_task(task_id)
+                return pet.complete_task(task_id, completed_on)
         return None
 
 
@@ -510,7 +534,9 @@ class Scheduler:
             return format_minutes(cursor)
         return None
 
-    def handle_recurring(self, task: Task) -> Optional[Task]:
+    def handle_recurring(
+        self, task: Task, completed_on: Optional[date] = None
+    ) -> Optional[Task]:
         """Build the next occurrence of a completed recurring task.
 
         Returns a new Task without attaching it, so a list being iterated is
@@ -518,7 +544,7 @@ class Scheduler:
         not yet complete. For the automatic path that also attaches the result,
         use Pet.complete_task() or Owner.complete_task().
         """
-        return next_occurrence(task)
+        return next_occurrence(task, completed_on)
 
     def plan_day(self, minutes_available: Optional[int] = None) -> List[Task]:
         """Build today's plan across every pet in self.owner.

@@ -10,7 +10,7 @@ Run with:
 import re
 import sys
 import unicodedata
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Sequence, Tuple
 
 from pawpal_system import (
@@ -335,7 +335,9 @@ def print_recurrence(owner: Owner, task_id: str) -> None:
     rule("Recurring tasks")
     pet = owner.find_pet_by_id("milo")
     before = len(pet.tasks)
-    spawned = owner.complete_task(task_id)
+    # The completion date is pinned to TODAY rather than read from the clock, so
+    # this demo prints the same dates whenever it is run.
+    spawned = owner.complete_task(task_id, completed_on=TODAY)
     if spawned is None:
         print(f"  {task_id} does not repeat, so completing it created nothing")
         return
@@ -343,6 +345,31 @@ def print_recurrence(owner: Owner, task_id: str) -> None:
     print(f"  follow-up created automatically: {spawned.id}")
     print(f"  due {spawned.due_date} at {spawned.time_str}, not completed")
     print(f"  {pet.name}'s task count went {before} -> {len(pet.tasks)}")
+
+    # A task finished long after it was due must not spawn an occurrence that is
+    # itself already overdue.
+    stale = Task(
+        id="milo-bath-overdue",
+        pet_id="milo",
+        title="Medicated Bath",
+        category="grooming",
+        time_str="10:00",
+        duration_minutes=30,
+        priority="medium",
+        frequency="weekly",
+        due_date=TODAY - timedelta(days=21),
+    )
+    pet.add_task(stale)
+    caught_up = pet.complete_task("milo-bath-overdue", completed_on=TODAY)
+    print(
+        f"  a weekly task due {stale.due_date} ({stale.due_date.strftime('%A')}) "
+        f"completed three weeks late"
+    )
+    print(
+        f"  next occurrence skips ahead to {caught_up.due_date} "
+        f"({caught_up.due_date.strftime('%A')}), still a "
+        f"{stale.due_date.strftime('%A')} task and no longer overdue"
+    )
 
 
 def print_persistence(owner: Owner) -> None:

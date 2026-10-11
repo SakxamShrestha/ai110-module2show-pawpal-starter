@@ -24,7 +24,10 @@ no dependency on the UI and can be driven entirely from the command line.
 - **Plan explanations**: one line per scheduled task saying why it is there, plus a note
   when it overlaps something else.
 - **Automatic recurrence.** Completing a `daily` or `weekly` task creates its next
-  occurrence by itself, with the due date advanced by `timedelta`.
+  occurrence by itself, with the due date advanced by `timedelta`. The next date is anchored
+  to the task's own `due_date`, not to when it was finished, so a weekly Monday task
+  completed late on Thursday stays a Monday task. A task finished weeks late advances in
+  whole steps until it lands in the future rather than spawning another overdue copy.
 - **Filtering** by completion status or by pet name.
 - **Priority-first ordering** as an alternative view: `sort_by_priority()` answers "what
   matters most" where `sort_by_time()` answers "what happens next".
@@ -204,11 +207,13 @@ Recurring tasks
   follow-up created automatically: milo-evening-kibble-2026-10-11
   due 2026-10-11 at 17:30, not completed
   Milo's task count went 3 -> 4
+  a weekly task due 2026-09-19 (Saturday) completed three weeks late
+  next occurrence skips ahead to 2026-10-17 (Saturday), still a Saturday task and no longer overdue
 
 Saving and loading
 ------------------
-  wrote 2 pets and 8 tasks to data.json
-  read back 2 pets and 8 tasks
+  wrote 2 pets and 10 tasks to data.json
+  read back 2 pets and 10 tasks
   round trip identical: True
   dates survive as dates: Brush Coat due datetime.date(2026, 10, 10) (date)
 ```
@@ -249,7 +254,7 @@ project directory on `sys.path`, which is what lets the tests `import pawpal_sys
 
 ### What the tests cover
 
-32 tests, grouped by the behavior they pin down:
+35 tests, grouped by the behavior they pin down:
 
 | Group | Tests | What is verified |
 |-------|-------|------------------|
@@ -261,6 +266,7 @@ project directory on `sys.path`, which is what lets the tests `import pawpal_sys
 | Planning | 3 | A 30-minute budget keeps the high and medium tasks and drops the low-priority one, even though the dropped task is last in the day -- priority decides, not clock position. With no budget every pending task is returned in clock order, completed ones excluded. A scheduler with no owner raises a clear message. |
 | Priority ordering | 2 | `sort_by_priority()` leads with a high-priority task even when it is last in the day, and falls back to clock order inside one priority band. |
 | Next available slot | 5 | A 30-minute request lands in the gap after an 07:00-07:30 task; a 45-minute request skips that gap and lands after the next task; a fully booked day returns `None`; a completed task no longer blocks the calendar; a zero-length request raises. |
+| Late completion | 3 | A weekly Monday task completed on Thursday still lands on the following Monday, because recurrence anchors to the due date rather than the completion date. A task finished three weeks late advances to a future date instead of spawning another overdue one, keeping its weekday. A task completed on time advances exactly one interval and no further. |
 | Persistence | 3 | A saved household reloads equal to the original, including a `due_date` that survives as a real `date` rather than the string JSON stored. A missing file returns `None` so a first run starts empty. A reloaded task is a real `Task`: its methods still work and completing it still spawns the next occurrence. |
 
 ### Sample test output
@@ -270,22 +276,22 @@ project directory on `sys.path`, which is what lets the tests `import pawpal_sys
 platform darwin -- Python 3.12.7, pytest-9.1.1, pluggy-1.6.0
 rootdir: /Users/sakxamshrestha/Desktop/ai110-module2show-pawpal-starter
 plugins: cov-7.1.0, anyio-4.15.1
-collected 32 items
+collected 35 items
 
-tests/test_pawpal.py ................................                    [100%]
+tests/test_pawpal.py ...................................                 [100%]
 
-============================== 32 passed in 0.03s ==============================
+============================== 35 passed in 0.03s ==============================
 ```
 
 ### Coverage
 
-Line coverage of `pawpal_system.py` is **88%** (279 statements, 34 uncovered):
+Line coverage of `pawpal_system.py` is **88%** (282 statements, 34 uncovered):
 
 ```
 Name               Stmts   Miss  Cover
 ------------------------------------------------
-pawpal_system.py     279     34    88%
-TOTAL                279     34    88%
+pawpal_system.py     282     34    88%
+TOTAL                282     34    88%
 ```
 
 The uncovered lines are mostly display helpers (`Task.describe()`, `Pet.label()`,
@@ -321,7 +327,7 @@ across the whole household rather than one pet at a time.
 | Filtering by status | `Scheduler.filter_by_status()`, `Pet.get_pending_tasks()`, `Owner.get_all_pending_tasks()` | Splits done from outstanding. `plan_day()` builds on this to drop work that does not fit the time available. |
 | Filtering by pet | `Scheduler.filter_by_pet()` | Pulls one pet's tasks out of the combined household list. Resolves a pet *name* to its id through the owner, and falls back to matching `pet_id` directly so it still works on a hand-built list with no owner attached. |
 | Conflict handling | `Scheduler.detect_conflicts()`, `Scheduler.conflict_warnings()`, `Task.overlaps()` | Compares time *ranges*, not start times: an 08:00 walk lasting 45 minutes collides with an 08:15 feeding, and two tasks at the same 17:30 collide too. `detect_conflicts()` returns the task pairs so a caller can act on them; `conflict_warnings()` wraps them as readable strings and never raises, because a clash is the owner's to resolve, not a program error. Tasks that merely touch end-to-start do not count. |
-| Recurring tasks | `Pet.complete_task()`, `Owner.complete_task()`, `next_occurrence()`, `Scheduler.handle_recurring()`, `Task.repeats()`, `Task.new_id()` | `daily` advances one day via `timedelta(days=1)`, `weekly` seven, `once` never repeats. Completing a recurring task through `Pet.complete_task()` or `Owner.complete_task()` attaches the follow-up automatically. `Scheduler.handle_recurring()` is the manual form: it returns the new occurrence without attaching it, so a list being iterated is never mutated mid-loop. |
+| Recurring tasks | `Pet.complete_task()`, `Owner.complete_task()`, `next_occurrence()`, `Scheduler.handle_recurring()`, `Task.repeats()`, `Task.new_id()` | `daily` advances one day via `timedelta(days=1)`, `weekly` seven, `once` never repeats. The next date is anchored to the stored `due_date` rather than the completion date, so a late finish does not let the task drift through the calendar, and a badly overdue task advances in whole steps until it is in the future. Completing through `Pet.complete_task()` or `Owner.complete_task()` attaches the follow-up automatically; `Scheduler.handle_recurring()` returns it without attaching, so a list being iterated is never mutated mid-loop. An optional `completed_on` argument lets a caller pin the clock, which is how the CLI demo prints stable dates. |
 | Time-budgeted planning | `Scheduler.plan_day()`, `dropped_from_plan()` | Spends a fixed number of available minutes on the most important outstanding tasks first, then returns the kept set in clock order. What gets dropped is decided by priority, not by position in the day. |
 | Priority-first ordering | `Scheduler.sort_by_priority()` | The mirror of `sort_by_time()`: most important first, clock order inside a band, title last so repeat runs match. Available in the CLI demo and behind the UI's Order by toggle. |
 | Next available slot | `Scheduler.next_available_slot()` | Sweeps the 07:00-21:00 care day once in clock order, carrying a cursor through booked time; the first gap wide enough is the answer. Considers every pet, so the slot offered does not collide with another animal's care, and skips completed tasks. Returns `None` rather than raising when the day is full. |
