@@ -11,6 +11,7 @@ import streamlit as st
 
 from main import build_household
 from pawpal_system import (
+    DATA_FILE,
     PRIORITIES,
     Owner,
     Pet,
@@ -30,21 +31,23 @@ def slugify(text: str) -> str:
     return "-".join(text.lower().split())
 
 
-def task_rows(scheduler: Scheduler, tasks: list) -> list:
-    """Turn tasks into table rows: one dict per task, in clock order."""
+def task_rows(scheduler: Scheduler, tasks: list, by_priority: bool = False) -> list:
+    """Turn tasks into table rows, ordered by time or by importance."""
+    ordered = (
+        scheduler.sort_by_priority(tasks) if by_priority else scheduler.sort_by_time(tasks)
+    )
     return [
         {
             "Time": f"{task.time_str}-{format_minutes(task.end_minutes())}",
             "Pet": scheduler.pet_name_for(task),
-            "Task": task.title,
-            "Category": task.category,
+            "Task": f"{task.icon()} {task.title}",
             "Minutes": task.duration_minutes,
-            "Priority": task.priority,
+            "Priority": f"{task.priority_icon()} {task.priority}",
             "Repeats": task.frequency,
             "With": task.assigned_to or "--",
-            "Status": "done" if task.is_completed else "todo",
+            "Done": task.status_icon(),
         }
-        for task in scheduler.sort_by_time(tasks)
+        for task in ordered
     ]
 
 
@@ -90,6 +93,23 @@ with st.sidebar:
     if owner.pets and st.button("Clear everything"):
         st.session_state.owner = Owner(name=owner.name, email=owner.email)
         st.rerun()
+
+    st.divider()
+    st.subheader("Saved data")
+    st.caption(f"Stored in `{DATA_FILE}` beside the app.")
+
+    save_col, load_col = st.columns(2)
+    if save_col.button("Save", use_container_width=True, disabled=not owner.pets):
+        path = owner.save_to_json()
+        st.success(f"Saved to {path}.")
+
+    if load_col.button("Load", use_container_width=True):
+        restored = Owner.load_from_json()
+        if restored is None:
+            st.warning(f"No {DATA_FILE} yet. Save first.")
+        else:
+            st.session_state.owner = restored
+            st.rerun()
 
 # --------------------------------------------------------------------------
 # Add a pet
@@ -154,6 +174,12 @@ with st.form("add_task", clear_on_submit=True):
     task_title = title_col.text_input("Task title", placeholder="Park Walk")
     task_category = category_col.selectbox("Category", CATEGORIES)
 
+    suggestion = scheduler.next_available_slot(30)
+    if suggestion:
+        st.caption(
+            f"Earliest 30-minute gap in today's 07:00-21:00 care day: **{suggestion}**"
+        )
+
     time_col, duration_col, priority_col = st.columns(3)
     task_time = time_col.time_input("Start time", value=time(8, 0))
     task_duration = duration_col.number_input(
@@ -213,8 +239,13 @@ summary[0].metric("Tasks today", len(all_tasks))
 summary[1].metric("Outstanding", pending_count)
 summary[2].metric("Done", done_count)
 
-# Ordering here is Scheduler.sort_by_time(), not insertion order.
-st.table(task_rows(scheduler, all_tasks))
+order = st.radio(
+    "Order by",
+    ("Time", "Priority"),
+    horizontal=True,
+    help="Time uses Scheduler.sort_by_time(); Priority uses sort_by_priority().",
+)
+st.table(task_rows(scheduler, all_tasks, by_priority=order == "Priority"))
 
 if done_count == len(all_tasks):
     st.success("Everything on today's list is done.")

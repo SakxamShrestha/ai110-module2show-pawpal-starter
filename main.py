@@ -7,10 +7,60 @@ Run with:
     python main.py
 """
 
+import re
+import sys
+import unicodedata
 from datetime import date
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
-from pawpal_system import Owner, Pet, Scheduler, Task, format_minutes
+from pawpal_system import (
+    DATA_FILE,
+    Owner,
+    Pet,
+    Scheduler,
+    Task,
+    format_minutes,
+)
+
+# ANSI colour is enabled only when writing to a terminal. Piping this output
+# into a file or a README then stays clean instead of filling with escape
+# codes.
+COLOR = sys.stdout.isatty()
+
+
+def paint(text: str, code: str) -> str:
+    """Wrap text in an ANSI colour code, or return it unchanged when piped."""
+    return f"\033[{code}m{text}\033[0m" if COLOR else text
+
+
+BOLD, DIM, RED, YELLOW, GREEN, CYAN = "1", "2", "31", "33", "32", "36"
+
+PRIORITY_COLORS = {"high": RED, "medium": YELLOW, "low": GREEN}
+
+_ANSI = re.compile(r"\033\[[0-9;]*m")
+
+
+def display_width(text: str) -> int:
+    """Return how many terminal columns this text occupies.
+
+    len() is the wrong measure for two reasons: an ANSI colour code takes
+    characters but no space, and an emoji takes one or two characters but two
+    columns. Padding with len() is what makes an emoji table look crooked.
+    """
+    plain = _ANSI.sub("", text)
+    width = 0
+    for char in plain:
+        # Variation selectors and combining marks render on top of the previous
+        # glyph rather than beside it.
+        if char in "\ufe0f\ufe0e" or unicodedata.combining(char):
+            continue
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+    return width
+
+
+def pad(text: str, width: int) -> str:
+    """Left-align text in a field of the given display width."""
+    return text + " " * max(0, width - display_width(text))
 
 # A fixed date keeps the recurring-task output identical on every run.
 TODAY = date(2026, 10, 10)
@@ -23,8 +73,30 @@ TIME_BUDGET = 30
 def rule(title: str) -> None:
     """Print a titled section divider."""
     print()
-    print(title)
-    print("-" * len(title))
+    print(paint(title, BOLD))
+    print(paint("-" * len(title), DIM))
+
+
+def render_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> None:
+    """Print rows as an aligned text table, sized to its widest cell.
+
+    Hand-rolled rather than pulled from `tabulate` so the project keeps a
+    two-package dependency list. Column widths are measured from the data, so
+    a long pet name never breaks the alignment.
+    """
+    if not rows:
+        print("  (nothing to show)")
+        return
+
+    columns = [[str(cell) for cell in column] for column in zip(headers, *rows)]
+    widths = [max(display_width(cell) for cell in column) for column in columns]
+
+    header_line = "  ".join(pad(head, width) for head, width in zip(headers, widths))
+    print("  " + paint(header_line, BOLD))
+    print("  " + paint("  ".join("-" * width for width in widths), DIM))
+    for row in rows:
+        cells = [pad(str(cell), width) for cell, width in zip(row, widths)]
+        print("  " + "  ".join(cells).rstrip())
 
 
 def build_household() -> Tuple[Owner, Scheduler]:
@@ -157,24 +229,47 @@ def print_household(owner: Owner) -> None:
         print(f"    tasks on file: {len(pet.tasks)}")
 
 
+def task_row(scheduler: Scheduler, task: Task) -> List[str]:
+    """Build one table row for a task, with glyphs and colour."""
+    return [
+        f"{task.time_str}-{format_minutes(task.end_minutes())}",
+        scheduler.pet_name_for(task),
+        f"{task.icon()} {task.title}",
+        f"{task.duration_minutes} min",
+        f"{task.priority_icon()} {paint(task.priority, PRIORITY_COLORS[task.priority])}",
+        task.frequency,
+        task.status_icon(),
+        task.assigned_to or "--",
+    ]
+
+
+TASK_HEADERS = ("WHEN", "PET", "TASK", "LENGTH", "PRIORITY", "REPEATS", "DONE", "WITH")
+
+
 def print_schedule(scheduler: Scheduler, tasks: List[Task], title: str) -> None:
     """Print tasks in clock order as an aligned table."""
     rule(title)
-    if not tasks:
-        print("  (nothing scheduled)")
-        return
-
     ordered = scheduler.sort_by_time(tasks)
-    pet_width = max(len(scheduler.pet_name_for(task)) for task in ordered)
-    for task in ordered:
-        window = f"{task.time_str}-{format_minutes(task.end_minutes())}"
-        pet = scheduler.pet_name_for(task).ljust(pet_width)
-        status = "done" if task.is_completed else "todo"
-        who = f" (with {task.assigned_to})" if task.assigned_to else ""
-        print(
-            f"  {window}  {pet}  {task.title:<15} "
-            f"{task.duration_minutes:>3} min  {task.priority:<6} {status}{who}"
-        )
+    render_table(TASK_HEADERS, [task_row(scheduler, task) for task in ordered])
+
+
+def print_by_priority(scheduler: Scheduler, tasks: List[Task]) -> None:
+    """Print the same tasks ordered by importance instead of by clock time."""
+    rule("Ordered by priority, then time")
+    ordered = scheduler.sort_by_priority(tasks)
+    render_table(TASK_HEADERS, [task_row(scheduler, task) for task in ordered])
+    print(paint("  high priority first; ties fall back to clock order", DIM))
+
+
+def print_next_slot(scheduler: Scheduler) -> None:
+    """Show where a new task of a given length would fit today."""
+    rule("Next available slot")
+    for minutes in (15, 30, 90, 240):
+        slot = scheduler.next_available_slot(minutes)
+        if slot is None:
+            print(f"  {minutes:>3} min: no gap left in the 07:00-21:00 care day")
+        else:
+            print(f"  {minutes:>3} min: earliest free at {paint(slot, CYAN)}")
 
 
 def print_insertion_order(scheduler: Scheduler, tasks: List[Task]) -> None:
@@ -203,8 +298,8 @@ def print_conflicts(scheduler: Scheduler, tasks: List[Task]) -> None:
         print("  none -- no two tasks overlap")
         return
     for warning in warnings:
-        print(f"  {warning}")
-    print("  reported as warnings, so the program keeps running")
+        print(f"  {paint(warning, YELLOW)}")
+    print(paint("  reported as warnings, so the program keeps running", DIM))
 
 
 def print_status_split(scheduler: Scheduler, tasks: List[Task]) -> None:
@@ -250,6 +345,31 @@ def print_recurrence(owner: Owner, task_id: str) -> None:
     print(f"  {pet.name}'s task count went {before} -> {len(pet.tasks)}")
 
 
+def print_persistence(owner: Owner) -> None:
+    """Save the household to JSON, read it back, and prove nothing was lost."""
+    rule("Saving and loading")
+    path = owner.save_to_json(DATA_FILE)
+    print(f"  wrote {len(owner.pets)} pets and {len(owner.get_all_tasks())} tasks to {path}")
+
+    restored = Owner.load_from_json(path)
+    if restored is None:
+        print("  no saved file found")
+        return
+
+    print(
+        f"  read back {len(restored.pets)} pets and "
+        f"{len(restored.get_all_tasks())} tasks"
+    )
+    identical = restored == owner
+    print(f"  round trip identical: {paint(str(identical), GREEN if identical else RED)}")
+
+    sample = restored.get_all_tasks()[0]
+    print(
+        f"  dates survive as dates: {sample.title} due {sample.due_date!r} "
+        f"({type(sample.due_date).__name__})"
+    )
+
+
 def main() -> None:
     """Run the full demo."""
     owner, scheduler = build_household()
@@ -265,8 +385,11 @@ def main() -> None:
     owner.find_pet("Luna").find_task("luna-feed-am").mark_complete()
 
     print_status_split(scheduler, owner.get_all_tasks())
+    print_by_priority(scheduler, owner.get_all_pending_tasks())
+    print_next_slot(scheduler)
     print_budgeted_plan(scheduler, TIME_BUDGET)
     print_recurrence(owner, "milo-feed-pm")
+    print_persistence(owner)
     print()
 
 

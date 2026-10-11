@@ -11,11 +11,36 @@ Classes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+import json
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 PRIORITIES = ("low", "medium", "high")
+
+# Where save_to_json() and load_from_json() default to.
+DATA_FILE = "data.json"
+
+# A glyph per category, used by the CLI and the Streamlit UI so a task's kind
+# is readable at a glance instead of requiring the category column to be read.
+CATEGORY_ICONS: Dict[str, str] = {
+    "walk": "🚶",
+    "feeding": "🍖",
+    "medication": "💊",
+    "grooming": "🛁",
+    "enrichment": "🧶",
+    "vet": "🩺",
+    "other": "📌",
+}
+
+# Status and priority glyphs, kept beside the category icons so every display
+# surface draws from one place.
+STATUS_ICONS: Dict[bool, str] = {True: "✅", False: "⬜"}
+PRIORITY_ICONS: Dict[str, str] = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+
+# The window plan_day() and next_available_slot() treat as the care day.
+DAY_START = "07:00"
+DAY_END = "21:00"
 
 # Higher number means more important, so sorting descending puts "high" first.
 _PRIORITY_RANK: Dict[str, int] = {name: i for i, name in enumerate(PRIORITIES)}
@@ -143,6 +168,32 @@ class Task:
         slug = "-".join(title.lower().split())
         return f"{pet_id}-{slug}-{when}"
 
+    def icon(self) -> str:
+        """Return the glyph for this task's category."""
+        return CATEGORY_ICONS.get(self.category, CATEGORY_ICONS["other"])
+
+    def status_icon(self) -> str:
+        """Return a glyph showing whether this task is done."""
+        return STATUS_ICONS[self.is_completed]
+
+    def priority_icon(self) -> str:
+        """Return a glyph showing how important this task is."""
+        return PRIORITY_ICONS[self.priority]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe dict of this task, with the date as a string."""
+        data = asdict(self)
+        data["due_date"] = self.due_date.isoformat() if self.due_date else None
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Task":
+        """Rebuild a Task from to_dict() output, parsing the date back."""
+        fields = dict(data)
+        raw_date = fields.get("due_date")
+        fields["due_date"] = date.fromisoformat(raw_date) if raw_date else None
+        return cls(**fields)
+
     def describe(self) -> str:
         """Return a one-line summary of this task for CLI output."""
         window = f"{self.time_str}-{format_minutes(self.end_minutes())}"
@@ -212,6 +263,25 @@ class Pet:
         """Return a display name, including breed when one is known."""
         return f"{self.name} ({self.breed})" if self.breed else self.name
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe dict of this pet and its tasks."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "species": self.species,
+            "breed": self.breed,
+            "age": self.age,
+            "dietary_notes": self.dietary_notes,
+            "tasks": [task.to_dict() for task in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Pet":
+        """Rebuild a Pet and its tasks from to_dict() output."""
+        fields = dict(data)
+        tasks = [Task.from_dict(raw) for raw in fields.pop("tasks", [])]
+        return cls(tasks=tasks, **fields)
+
 
 @dataclass
 class Owner:
@@ -251,6 +321,46 @@ class Owner:
                 return pet
         return None
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe dict of the whole household."""
+        return {
+            "name": self.name,
+            "email": self.email,
+            "phone": self.phone,
+            "pets": [pet.to_dict() for pet in self.pets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Owner":
+        """Rebuild an Owner, its pets, and their tasks from to_dict() output."""
+        fields = dict(data)
+        pets = [Pet.from_dict(raw) for raw in fields.pop("pets", [])]
+        return cls(pets=pets, **fields)
+
+    def save_to_json(self, path: str = DATA_FILE) -> str:
+        """Write the household to a JSON file and return the path written.
+
+        Dates are stored as ISO strings and rebuilt on load, because json has
+        no date type of its own.
+        """
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(self.to_dict(), handle, indent=2)
+        return path
+
+    @classmethod
+    def load_from_json(cls, path: str = DATA_FILE) -> Optional["Owner"]:
+        """Read a household back from a JSON file.
+
+        Returns None when the file does not exist, so a first run starts empty
+        instead of crashing. A file that exists but is corrupt raises, because
+        silently discarding someone's saved pets would be worse.
+        """
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return cls.from_dict(json.load(handle))
+        except FileNotFoundError:
+            return None
+
     def complete_task(self, task_id: str) -> Optional[Task]:
         """Complete a task belonging to any pet, spawning a follow-up if it recurs."""
         for pet in self.pets:
@@ -288,6 +398,18 @@ class Scheduler:
         return sorted(
             tasks,
             key=lambda task: (task.start_minutes(), -task.priority_rank(), task.title),
+        )
+
+    def sort_by_priority(self, tasks: List[Task]) -> List[Task]:
+        """Return the tasks most important first, then chronologically.
+
+        The mirror image of sort_by_time(): where that answers "what happens
+        next", this answers "what matters most". Ties inside a priority band
+        fall back to clock order, then title, so the result is reproducible.
+        """
+        return sorted(
+            tasks,
+            key=lambda task: (-task.priority_rank(), task.start_minutes(), task.title),
         )
 
     def filter_by_status(self, tasks: List[Task], completed: bool) -> List[Task]:
@@ -345,6 +467,48 @@ class Scheduler:
                 f"{second.title} starts {second.time_str}"
             )
         return warnings
+
+    def next_available_slot(
+        self,
+        duration_minutes: int,
+        tasks: Optional[List[Task]] = None,
+        day_start: str = DAY_START,
+        day_end: str = DAY_END,
+    ) -> Optional[str]:
+        """Return the earliest "HH:MM" where a task of this length fits.
+
+        Sweeps the day once in clock order, carrying a cursor through the
+        booked time: whenever the gap between the cursor and the next task is
+        wide enough, that gap is the answer. Returns None when nothing in the
+        window is long enough.
+
+        Defaults to every task across the household, so the slot it offers does
+        not collide with another pet's care.
+        """
+        if duration_minutes <= 0:
+            raise ValueError("duration_minutes must be positive")
+
+        if tasks is None:
+            tasks = self.owner.get_all_tasks() if self.owner is not None else []
+
+        window_start = _parse_hhmm(day_start)
+        window_end = _parse_hhmm(day_end)
+        cursor = window_start
+
+        for task in self.sort_by_time(tasks):
+            # Tasks already finished do not block the calendar.
+            if task.is_completed:
+                continue
+            start, end = task.start_minutes(), task.end_minutes()
+            if end <= cursor or start >= window_end:
+                continue
+            if start - cursor >= duration_minutes:
+                return format_minutes(cursor)
+            cursor = max(cursor, end)
+
+        if window_end - cursor >= duration_minutes:
+            return format_minutes(cursor)
+        return None
 
     def handle_recurring(self, task: Task) -> Optional[Task]:
         """Build the next occurrence of a completed recurring task.

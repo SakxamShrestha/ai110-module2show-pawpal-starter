@@ -299,3 +299,120 @@ def test_plan_day_without_an_owner_explains_itself():
     """A scheduler with nothing attached says so instead of failing obscurely."""
     with pytest.raises(ValueError, match="no owner attached"):
         Scheduler().plan_day()
+
+
+# ---------------------------------------------------------------------------
+# Priority-first ordering
+# ---------------------------------------------------------------------------
+
+
+def test_sort_by_priority_puts_important_tasks_first(scheduler):
+    """sort_by_priority() leads with high priority even when it is late in the day."""
+    tasks = [
+        make_task("brush", "08:00", priority="low", title="Brush"),
+        make_task("meds", "19:00", priority="high", title="Meds"),
+        make_task("play", "12:00", priority="medium", title="Play"),
+    ]
+    assert [task.id for task in scheduler.sort_by_priority(tasks)] == [
+        "meds",
+        "play",
+        "brush",
+    ]
+
+
+def test_sort_by_priority_falls_back_to_clock_order(scheduler):
+    """Inside one priority band, the earlier task comes first."""
+    tasks = [
+        make_task("late", "17:00", priority="high", title="Late"),
+        make_task("early", "08:00", priority="high", title="Early"),
+    ]
+    assert [task.id for task in scheduler.sort_by_priority(tasks)] == ["early", "late"]
+
+
+# ---------------------------------------------------------------------------
+# Next available slot
+# ---------------------------------------------------------------------------
+
+
+def test_next_available_slot_finds_the_gap_between_tasks(scheduler):
+    """A 30-minute request lands in the gap after an 07:00-07:30 task."""
+    tasks = [
+        make_task("first", "07:00", duration_minutes=30),
+        make_task("second", "08:00", duration_minutes=45),
+    ]
+    assert scheduler.next_available_slot(30, tasks) == "07:30"
+
+
+def test_next_available_slot_skips_a_gap_that_is_too_short(scheduler):
+    """A 45-minute request cannot use the 30-minute gap, so it lands after."""
+    tasks = [
+        make_task("first", "07:00", duration_minutes=30),
+        make_task("second", "08:00", duration_minutes=45),
+    ]
+    assert scheduler.next_available_slot(45, tasks) == "08:45"
+
+
+def test_next_available_slot_returns_none_when_the_day_is_full(scheduler):
+    """With the whole care day booked there is no slot to offer."""
+    tasks = [make_task("all-day", "07:00", duration_minutes=14 * 60)]
+    assert scheduler.next_available_slot(30, tasks) is None
+
+
+def test_next_available_slot_ignores_completed_tasks(scheduler):
+    """A finished task no longer blocks the calendar."""
+    done = make_task("done", "07:00", duration_minutes=120)
+    done.mark_complete()
+    assert scheduler.next_available_slot(60, [done]) == "07:00"
+
+
+def test_next_available_slot_rejects_a_zero_length_request(scheduler):
+    """Asking where a zero-minute task fits is a programming error."""
+    with pytest.raises(ValueError, match="must be positive"):
+        scheduler.next_available_slot(0, [])
+
+
+# ---------------------------------------------------------------------------
+# JSON persistence
+# ---------------------------------------------------------------------------
+
+
+def test_save_and_load_round_trips_the_whole_household(tmp_path, household):
+    """Everything written to JSON comes back equal, dates included."""
+    milo = household.find_pet("Milo")
+    milo.add_task(
+        make_task("walk", "08:00", frequency="daily", due_date=date(2026, 10, 10))
+    )
+    household.find_pet("Luna").add_task(
+        make_task("feed", "08:15", pet_id="luna", title="Kibble")
+    )
+
+    path = household.save_to_json(str(tmp_path / "data.json"))
+    restored = Owner.load_from_json(path)
+
+    assert restored == household
+    assert len(restored.get_all_tasks()) == 2
+    # json has no date type, so this is the assertion that matters: the string
+    # it was stored as has been parsed back into a real date.
+    assert restored.find_pet("Milo").find_task("walk").due_date == date(2026, 10, 10)
+
+
+def test_load_from_json_returns_none_when_there_is_no_file(tmp_path):
+    """A first run with no saved data starts empty rather than crashing."""
+    assert Owner.load_from_json(str(tmp_path / "absent.json")) is None
+
+
+def test_saved_task_keeps_working_after_a_reload(tmp_path, household):
+    """A rebuilt task is a real Task, not a dict: its methods still work."""
+    household.find_pet("Milo").add_task(
+        make_task("walk", "08:00", duration_minutes=45, frequency="daily",
+                  due_date=date(2026, 10, 10))
+    )
+    path = household.save_to_json(str(tmp_path / "data.json"))
+
+    restored = Owner.load_from_json(path)
+    task = restored.find_pet("Milo").find_task("walk")
+
+    assert task.end_minutes() == 8 * 60 + 45
+    assert task.repeats() is True
+    follow_up = restored.find_pet("Milo").complete_task("walk")
+    assert follow_up.due_date == date(2026, 10, 11)
